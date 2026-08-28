@@ -13,7 +13,9 @@ export {
 } from './host';
 export { GuideView, resolveGuideSectionFiles } from './GuideView';
 export { GuideSectionCard } from './GuideSectionCard';
+export { GuideDiagram } from './GuideDiagram';
 export { GuideFileCard, estimateDiffHeight } from './GuideFileCard';
+export { GuidePeek } from './GuidePeek';
 export { GuideViewportProvider, useGuideFileWindow, GUIDE_MAX_MOUNTED_CODE_VIEWS } from './GuideViewportManager';
 export { GuideSectionSkeleton } from './GuideSkeleton';
 export { GuideViewer, type GuideViewerProps } from './GuideViewer';

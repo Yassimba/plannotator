@@ -281,7 +281,7 @@ export interface AllFilesCodeViewProps {
   /** Tokenized request to reveal a file through CodeView's own item navigation.
    *  Guided Review uses this for outline chips and sidebar/AI jumps. The token
    *  lets repeated requests for the same path fire again. */
-  fileScrollTarget?: { filePath: string; token: number } | null;
+  fileScrollTarget?: { filePath: string; token: number; line?: number } | null;
   // Which left panel drives the item order: 'tree' (folders-first visual
   // order) or 'list' (files array verbatim — the sections view's order).
   fileOrder?: 'tree' | 'list';
@@ -2164,10 +2164,17 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         syncAllCollapsedMirror();
         reportFileCollapsed(itemId, false);
       }
-      handle.scrollTo({ type: 'item', id: itemId, align: 'start' });
+      // A guide binding may name a line (`data-code="path:40-66"`): land on it
+      // rather than the file header. New-side numbering, like context rows in search.
+      const line = fileScrollTarget.line;
+      if (line != null && line > 0) {
+        handle.scrollTo({ type: 'line', id: itemId, lineNumber: line, side: 'additions', align: 'center' });
+      } else {
+        handle.scrollTo({ type: 'item', id: itemId, align: 'start' });
+      }
     });
     return () => cancelAnimationFrame(raf);
-  }, [fileScrollTarget?.filePath, fileScrollTarget?.token, fileSetKey, filePathToItemId, syncAllCollapsedMirror, reportFileCollapsed]);
+  }, [fileScrollTarget?.filePath, fileScrollTarget?.token, fileScrollTarget?.line, fileSetKey, filePathToItemId, syncAllCollapsedMirror, reportFileCollapsed]);
 
   // --- Selected-annotation highlight + navigation ----------------------------
 

@@ -746,6 +746,67 @@ Viewer runtime invariants (`apps/guides-show/viewer/`): the highlight worker is 
 
 Three producers share the one pure export (`createGuideHtml`): the in-app **Download portable guide** button, `plannotator guide export --id <saved>`, and the agent path `plannotator guide export --guide guide.json --patch guide.patch` (`packages/server/guide/guide-cli.ts`, `buildAuthoredGuideSnapshot`) used by the standalone `plannotator-guide` agent skill (its own repo, `plannotator/guides` — deliberately NOT part of this repo or its installers). The authored form takes the same `{ title, intent, sections, unplacedFiles? }` shape the in-app generator emits plus optional `review { gitRef, base }`, `source`, `generator`; it is STRICT where the in-app validator is lenient (a file not in the patch, or placed twice, is an error listing the patch's files — exit 1 — rather than a silently dropped chapter), fills `source` from git in cwd (`origin` → owner/repo, branch, head sha) unless the guide supplies one, and round-trips the built snapshot through the strict format parser so a bad `source`/`generator` fails at export time. `--patch -` reads stdin. The skill's worked example is the `AUTHORED` fixture in `guide-cli.test.ts` — keep them in step.
 
+### Section diagrams (click-to-code)
+
+A guide section may carry `diagrams`: inline `<svg>` strings in reading order
+(`packages/core/guide.ts`, optional in `GUIDE_SCHEMA_JSON` and in the strict
+`parseSection`, capped at `MAX_GUIDE_DIAGRAMS`). They render above the file
+chips via `packages/guide-viewer/GuideDiagram.tsx`. It is a list because a
+chapter often shows a shape before showing what moved in it.
+
+`plannotator guide import --guide <g.json> --patch <p>` puts an authored guide
+on the local shelf (`packages/server/guide/guide-cli.ts`) so `plannotator
+review` can OPEN it under Previous guides — annotatable, with threads — rather
+than freezing it into a portable file the way `export` and `share` do. It
+validates with `buildAuthoredGuideSnapshot`, so a guide that imports is a guide
+that exports, and it writes patch-then-envelope like the in-app autosave. The
+shelf key is resolved the same way `createGuideStoreSession` resolves it, or an
+import would land where the app never looks.
+
+Elements in that SVG bind to source with `data-code` — a comma-separated list
+of changed-file paths, first entry primary — parsed by
+`@plannotator/core/diagram-svg` (no imports, so core stays dependency-free).
+A `:lines` or `@rev` suffix is trimmed rather than rejected; the reveal channel
+is file-level, so nothing reads one today.
+`GuideDiagram` delegates one click handler from the container (the markup is
+injected as a string, so there are no React nodes to bind) and routes the
+primary path through the host's existing `onRevealFile` channel. A
+`:from-to` (or `:line`) suffix on the primary entry is kept as the line to
+center (`primaryCodeTarget`); it travels as `fileScrollTarget.line` into
+`AllFilesCodeView`, new-side numbering like search matches. Prose can bind the
+same way: `[text](code:path:from-to)` in a section overview renders as an
+`<a data-code>` (`renderInlineMarkdown`) and the section delegates its click
+exactly like a figure (`codeTargetFromClick`).
+
+**Document mode.** A guide with at least one figure renders as one continuous
+document, the way a Review reads: a contents rail, chapters as plain sections
+(prose, figures, file chips), and ONE code peek beside them (`GuidePeek`, a
+`GuideFileCard` with `fill`) holding the file the reader last opened from a
+box, an anchor, or a chip. Close gives the document the width back until the
+next reveal. The reading loop: click a figure's empty canvas to enlarge it
+(`GuideDiagram` zoom overlay, Esc or click leaves it; a bound box inside it
+zooms out AND opens its code), `⇧Z` fills the window with the peek, Esc
+leaves it. Both shortcuts are ignored while an input, textarea or
+contenteditable has focus. A guide without figures keeps the card layout, where every file's
+diff sits in flow and the code IS the chapter. Both layouts live in
+`GuideView` (`DocumentLayout`) and `GuideSectionCard` (`document` prop), so
+in-app and the portable viewer render the same thing because both hosts
+implement the same `GuideHostValue`.
+
+The SVG is agent-authored, so it is sanitized **at render**
+(`packages/guide-viewer/sanitizeDiagramSvg.ts`, DOMPurify SVG profile, no
+`foreignObject`, binding attributes allowlisted back). Render is the only step
+every producer passes through — the in-app job, the authored CLI path, a
+portable export, and a direct upload to a share host — and a share host serves
+other people's guides from one origin, so a sanitizer any producer can bypass
+is not one. That is why it is not done at validation time. It lives in
+guide-viewer rather than core because core has no dependencies.
+
+The organizer prompt's `#### Section diagram` section governs when a chapter
+earns a figure (most guides: zero; never more than two) and requires every
+bound path to be one of the changed files. Like the rest of the prompt it is
+MIRRORED into the standalone `plannotator-guide` skill — update both.
+
 ### Hosted share links (guide share hosting)
 
 Contract: `adr/implementation/guide-share-hosting.md` (names, routes, shapes and error codes there are final; change them there first). A guide can also be shared as a link on a guide host instead of a downloaded file: the review header's Share menu offers **Download portable guide** (unchanged) and **Create share link**; the CLI has `plannotator guide share --id <saved> | --guide g.json --patch p.patch | --snapshot s.json [--public] [--ttl 7d|24h|30m|3600] [--json]` (stdout: the URL, or `{ id, url, deleteToken, expiresAt? }` with `--json`; stderr: the size and the exact `Delete with: plannotator guide unshare <id> --token <t>` line) and `plannotator guide unshare <id> --token <t>` (removal goes to the host a saved guide's record names, else `PLANNOTATOR_GUIDE_SHARE_URL` / `guideShareUrl`). `--id` refuses with exit 1 while the saved guide already records a link. Exit codes match `export` (0 / 1 not found, invalid, service error / 2 usage). The upload itself is `shareGuide` / `unshareGuide` in `packages/server/guide/guide-share.ts` (vendored to Pi as `apps/pi-extension/generated/guide-share.ts`; both review servers expose the same `/share`, `/share-info` and `DELETE /share` endpoints). No upload ever happens without the Create click or the CLI command.

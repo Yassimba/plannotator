@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiffFile } from './types';
-import { useGuideHost } from './host';
+import { useGuideHost, type GuideFileScrollTarget } from './host';
 import { renderInlineMarkdown } from './renderInlineMarkdown';
 import { useGuideFileWindow } from './GuideViewportManager';
 
@@ -13,8 +13,10 @@ interface GuideFileCardProps {
   file: DiffFile;
   summary?: string;
   focused: boolean;
-  revealTarget: { filePath: string; token: number } | null;
+  revealTarget: GuideFileScrollTarget | null;
   onActivate: (filePath: string) => void;
+  /** Fill the parent's height instead of the patch-sized shell (the code peek). */
+  fill?: boolean;
 }
 
 /**
@@ -28,6 +30,7 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
   focused,
   revealTarget,
   onActivate,
+  fill = false,
 }) => {
   const { DiffRenderer, getDiffRendererProps } = useGuideHost();
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -37,7 +40,7 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
   const { mounted, register, requestMount } = useGuideFileWindow(file.path, focused);
   const diffHeight = useMemo(() => estimateDiffHeight(file.patch), [file.patch]);
   const target = revealTarget?.filePath === file.path ? revealTarget : null;
-  const renderedHeight = collapsed ? 49 : diffHeight;
+  const renderedHeight = fill ? '100%' : collapsed ? 49 : diffHeight;
 
   // A navigation target can live far outside the current outer window or in a
   // chapter that was just reopened. Force its CodeView first, then move the
@@ -70,7 +73,7 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
     <div
       ref={attachShell}
       data-guide-file-shell={file.path}
-      className="scroll-mt-4"
+      className={fill ? 'flex h-full min-h-0 flex-col' : 'scroll-mt-4'}
       onPointerEnter={() => {
         requestMount();
         onActivate(file.path);
@@ -88,7 +91,7 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
 
       <div
         style={{ height: renderedHeight }}
-        className="overflow-hidden rounded-lg border border-border/40 bg-background"
+        className={`overflow-hidden rounded-lg border border-border/40 bg-background${fill ? ' min-h-0 flex-1' : ''}`}
         data-guide-code-view-mounted={mounted ? 'true' : 'false'}
       >
         {mounted ? (

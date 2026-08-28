@@ -27,6 +27,9 @@ export const GUIDE_EXPORT_META_NAME = "plannotator-guided-review";
 /** Structural sanity caps — these bound parsing work, they are NOT size limits (D1: no caps on diff size). */
 export const MAX_GUIDE_SECTIONS = 100;
 export const MAX_GUIDE_DIFF_REFS = 50_000;
+/** Figures in one chapter. A ladder is a few views of one change; past this
+ *  it is a slideshow, and the cap keeps a hostile snapshot from being one. */
+export const MAX_GUIDE_DIAGRAMS = 12;
 
 /** What kind of changeset the guide describes. Rendered in the viewer header so a reader knows what they are looking at. */
 export type GuideSourceKind = "local" | "pr" | "workspace" | "commit";
@@ -247,7 +250,7 @@ function parseDiffRef(input: unknown, path: string): Parsed<GuideDiffRef> {
 function parseSection(input: unknown, path: string): Parsed<GuideSection> {
   const object = asRecord(input, path);
   if (isFail(object)) return object;
-  const s = strict(object.value, ["title", "overview", "diffs"], path);
+  const s = strict(object.value, ["title", "overview", "diffs", "diagrams"], path);
   if (isFail(s)) return s;
   const title = str(s.value.title, `${path}.title`, { nonEmpty: true });
   if (isFail(title)) return title;
@@ -260,7 +263,19 @@ function parseSection(input: unknown, path: string): Parsed<GuideSection> {
     if (isFail(ref)) return ref;
     diffs.push(ref.value);
   }
-  return { ok: true, value: { title: title.value, overview: overview.value, diffs } };
+  let diagrams: string[] | undefined;
+  if (s.value.diagrams !== undefined) {
+    if (!Array.isArray(s.value.diagrams)) return fail(`${path}.diagrams`, "Expected an array");
+    for (let i = 0; i < s.value.diagrams.length; i++) {
+      if (typeof s.value.diagrams[i] !== "string") return fail(`${path}.diagrams[${i}]`, "Expected a string");
+    }
+    const kept = (s.value.diagrams as string[]).filter((d) => d.trim());
+    if (kept.length > MAX_GUIDE_DIAGRAMS) {
+      return fail(`${path}.diagrams`, `Section exceeds the ${MAX_GUIDE_DIAGRAMS}-figure limit`);
+    }
+    if (kept.length) diagrams = kept;
+  }
+  return { ok: true, value: { title: title.value, overview: overview.value, diffs, ...(diagrams ? { diagrams } : {}) } };
 }
 
 function parseGuide(input: unknown): Parsed<GuideSnapshotGuide> {

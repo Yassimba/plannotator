@@ -1,8 +1,13 @@
 import React from 'react';
+import { CODE_BINDING_ATTR } from '@plannotator/core/diagram-svg';
 
 /**
  * Renders simple inline markdown: `code`, **bold**, *italic*, _italic_, and
  * fenced code blocks (```...```). Enough for review comments.
+ *
+ * A `[text](code:path:from-to)` link is a code anchor: it renders with the
+ * binding on `data-code` and no navigation of its own; the enclosing surface
+ * delegates the click (see `codeTargetFromClick`).
  */
 export function renderInlineMarkdown(text: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -37,7 +42,7 @@ function renderInline(text: string, startKey: number): React.ReactNode[] {
   let key = startKey;
 
   // Match inline patterns: [text](url), `code`, **bold**, *italic*, _italic_, bare URLs
-  const regex = /(\[([^\]]+)\]\((https?:\/\/[^)]+)\)|`[^`]+`|\*\*[^*]+\*\*|(?<!\w)_([^_\s](?:[\s\S]*?[^_\s])?)_(?!\w)|\*[^*]+\*|https?:\/\/[^\s<)\]]+)/g;
+  const regex = /(\[([^\]]+)\]\((https?:\/\/[^)]+|code:[^)\s]+)\)|`[^`]+`|\*\*[^*]+\*\*|(?<!\w)_([^_\s](?:[\s\S]*?[^_\s])?)_(?!\w)|\*[^*]+\*|https?:\/\/[^\s<)\]]+)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -65,6 +70,18 @@ function renderInline(text: string, startKey: number): React.ReactNode[] {
             className="max-w-full h-auto rounded my-1"
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
           />
+        );
+      } else if (match[3].startsWith('code:')) {
+        // Code anchor: [text](code:path:lines) — the container opens it in the peek.
+        nodes.push(
+          <a
+            key={key++}
+            href="#"
+            {...{ [CODE_BINDING_ATTR]: match[3].slice('code:'.length) }}
+            className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
+          >
+            {match[2]}
+          </a>
         );
       } else {
         // Markdown link: [text](url)
