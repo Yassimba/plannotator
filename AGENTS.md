@@ -771,8 +771,8 @@ diagram-design figures bound to changed files, ADHD-shaped prose.
 `composeWalkthroughPrompt` binds the skill to the job (range = the launch
 diff, no `plannotator guide import`/`review`, final answer = guide JSON with
 diagrams inline) and every engine runs it: Claude through
-`buildGuideWalkthroughClaudeCommand` (allowlist widened with Write, Edit,
-python3, rsvg-convert, bash; the app's own CLI and git writes denied), Codex
+`buildGuideClaudeCommand(…, walkthrough = true)` (allowlist widened with Write,
+Edit, python3, rsvg-convert, bash; the app's own CLI and git writes denied), Codex
 in its workspace-write sandbox unchanged, and the marker engines with
 `MarkerBuildOptions.walkthrough` lifting their read-only guard for that job
 (Cursor `--mode agent` without the sandbox, OpenCode `--agent build`, Pi
@@ -792,7 +792,7 @@ primary path through the host's existing `onRevealFile` channel. A
 `:from-to` (or `:line`) suffix on the primary entry is kept as the line to
 center (`primaryCodeTarget`); it travels as `fileScrollTarget.line` into
 `AllFilesCodeView`, new-side numbering like search matches. Prose can bind the
-same way: `[text](code:path:from-to)` in a section overview renders as an
+same way: `[text](path:from-to)` in a section overview, where the target is a code path by the app's own grammar (`isCodeFilePathStrict`), renders as an
 `<a data-code>` (`renderInlineMarkdown`) and the section delegates its click
 exactly like a figure (`codeTargetFromClick`).
 

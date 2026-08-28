@@ -462,8 +462,8 @@ describe('document mode (guides with figures)', () => {
   const figureGuide = () =>
     makeGuide({
       sections: [
-        { title: 'Core', overview: 'Open [the core](code:b.ts:2) here.', diffs: [{ file: 'a.ts', summary: 'Changes A.' }], diagrams: [figure] },
-        { title: 'Glue', overview: 'Wiring.', diffs: [{ file: 'b.ts', summary: 'Changes B.' }] },
+        { title: 'Core', overview: 'Open [the core](src/b.ts:2) here.', diffs: [{ file: 'a.ts', summary: 'Changes A.' }], diagrams: [figure] },
+        { title: 'Glue', overview: 'Wiring.', diffs: [{ file: 'src/b.ts', summary: 'Changes B.' }] },
       ],
       reviewed: [false, false],
     });
@@ -491,12 +491,12 @@ describe('document mode (guides with figures)', () => {
   });
 
   test.skipIf(!hasDom)('a prose anchor swaps the peek to its file and Close hides it until the next reveal', async () => {
-    await renderView(figureGuide(), { state: makeState({ files: [makeFile('a.ts'), makeFile('b.ts')] }) });
+    await renderView(figureGuide(), { state: makeState({ files: [makeFile('a.ts'), makeFile('src/b.ts')] }) });
 
     await act(async () => {
       host!.querySelector('article a[data-code]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(host!.querySelector('[data-guide-peek]')?.getAttribute('data-guide-peek')).toBe('b.ts');
+    expect(host!.querySelector('[data-guide-peek]')?.getAttribute('data-guide-peek')).toBe('src/b.ts');
 
     await act(async () => {
       (host!.querySelector('[aria-label="Close code"]') as HTMLElement).click();

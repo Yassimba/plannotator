@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Maximize2 } from 'lucide-react';
-import { CODE_BINDING_ATTR, primaryCodeTarget, type CodeTarget } from '@plannotator/core/diagram-svg';
+import { CODE_BINDING_ATTR, primaryCodeTarget } from '@plannotator/core/diagram-svg';
+import type { ParsedCodePath } from '@plannotator/core/code-file';
 import { sanitizeDiagramSvg } from './sanitizeDiagramSvg';
 
 /**
@@ -18,7 +19,7 @@ import { sanitizeDiagramSvg } from './sanitizeDiagramSvg';
  * both carry bindings as `data-code` on injected markup, so both delegate one
  * handler from their container instead of binding per element.
  */
-export function codeTargetFromClick(event: React.MouseEvent<HTMLElement>): CodeTarget | null {
+export function codeTargetFromClick(event: React.MouseEvent<HTMLElement>): ParsedCodePath | null {
   const target = event.target as Element | null;
   const bound = target?.closest?.(`[${CODE_BINDING_ATTR}]`);
   if (!bound) return null;
@@ -56,7 +57,7 @@ export function GuideDiagram({
     }
     event.preventDefault();
     setZoomed(false);
-    onRevealFile(target.path, target.line);
+    onRevealFile(target.filePath, target.line);
   };
 
   // Figures are drawn on diagram-design's paper (light ground, ink text), so in
@@ -92,13 +93,12 @@ export function GuideDiagram({
   return (
     <div
       data-guide-diagram-zoom
-      className="fixed inset-0 z-50 flex cursor-zoom-out flex-col items-center justify-center gap-3 bg-background/90 p-8 backdrop-blur-sm motion-safe:[animation:guide-zoom-in_160ms_cubic-bezier(0.16,1,0.3,1)]"
+      className="fixed inset-0 z-50 flex cursor-zoom-out flex-col items-center justify-center gap-3 bg-background/90 p-8 backdrop-blur-sm"
       onClick={(event) => {
         // The backdrop zooms out; the plate's own handler decides bound vs. canvas.
         if (event.target === event.currentTarget) setZoomed(false);
       }}
     >
-      <style>{'@keyframes guide-zoom-in{from{opacity:0;transform:scale(0.98)}to{opacity:1;transform:none}}'}</style>
       <div className="max-h-full w-full max-w-[1400px]" onClick={(event) => event.stopPropagation()}>
         {figure}
       </div>

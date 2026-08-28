@@ -152,12 +152,12 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
     onToggleReviewed?.();
   };
 
-  /** A prose anchor (`[text](code:path:lines)`) opens its file like a figure box does. */
+  /** A prose anchor (`[text](path:from-to)`) opens its file like a figure box does. */
   const handleProseClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const target = codeTargetFromClick(event);
     if (!target) return;
     event.preventDefault();
-    onRequestReveal(target.path, target.line);
+    onRequestReveal(target.filePath, target.line);
   };
 
   if (documentMode) {

@@ -1,11 +1,13 @@
 import React from 'react';
 import { CODE_BINDING_ATTR } from '@plannotator/core/diagram-svg';
+import { isCodeFilePathStrict } from '@plannotator/core/code-file';
 
 /**
  * Renders simple inline markdown: `code`, **bold**, *italic*, _italic_, and
  * fenced code blocks (```...```). Enough for review comments.
  *
- * A `[text](code:path:from-to)` link is a code anchor: it renders with the
+ * A `[text](path:from-to)` link whose target is a code path (the app's own
+ * grammar, `isCodeFilePathStrict`) is a code anchor: it renders with the
  * binding on `data-code` and no navigation of its own; the enclosing surface
  * delegates the click (see `codeTargetFromClick`).
  */
@@ -42,7 +44,7 @@ function renderInline(text: string, startKey: number): React.ReactNode[] {
   let key = startKey;
 
   // Match inline patterns: [text](url), `code`, **bold**, *italic*, _italic_, bare URLs
-  const regex = /(\[([^\]]+)\]\((https?:\/\/[^)]+|code:[^)\s]+)\)|`[^`]+`|\*\*[^*]+\*\*|(?<!\w)_([^_\s](?:[\s\S]*?[^_\s])?)_(?!\w)|\*[^*]+\*|https?:\/\/[^\s<)\]]+)/g;
+  const regex = /(\[([^\]]+)\]\((https?:\/\/[^)]+|[^)\s]+)\)|`[^`]+`|\*\*[^*]+\*\*|(?<!\w)_([^_\s](?:[\s\S]*?[^_\s])?)_(?!\w)|\*[^*]+\*|https?:\/\/[^\s<)\]]+)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -71,13 +73,19 @@ function renderInline(text: string, startKey: number): React.ReactNode[] {
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
           />
         );
-      } else if (match[3].startsWith('code:')) {
-        // Code anchor: [text](code:path:lines) — the container opens it in the peek.
+      } else if (!match[3].startsWith('http')) {
+        // A code path opens in the peek (the container delegates the click);
+        // any other non-http target stays literal text.
+        if (!isCodeFilePathStrict(match[3])) {
+          nodes.push(token);
+          lastIndex = match.index + token.length;
+          continue;
+        }
         nodes.push(
           <a
             key={key++}
             href="#"
-            {...{ [CODE_BINDING_ATTR]: match[3].slice('code:'.length) }}
+            {...{ [CODE_BINDING_ATTR]: match[3] }}
             className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
           >
             {match[2]}
