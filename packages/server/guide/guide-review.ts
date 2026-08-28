@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
+import { resolveGlobalSkillRoots } from "../review-skill-loader";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 import { loadConfig, resolveCursorSandbox } from "../config";
@@ -458,15 +459,11 @@ function buildWorkspaceGuideUserMessage(
  */
 export type GuideWorkflow = "organizer" | "walkthrough";
 
-const WALKTHROUGH_SKILL_DIRS = [".claude/skills", ".agents/skills", ".codex/skills"];
-
-/** Path of the installed changeset-walkthrough SKILL.md, or null when absent. */
-export function resolveWalkthroughSkill(home: string = process.env.HOME || homedir()): string | null {
-  for (const dir of WALKTHROUGH_SKILL_DIRS) {
-    const candidate = join(home, dir, "changeset-walkthrough", "SKILL.md");
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
+/** Path of the installed changeset-walkthrough SKILL.md in any global skill root, or null. */
+export function resolveWalkthroughSkill(): string | null {
+  return resolveGlobalSkillRoots()
+    .map(({ dir }) => join(dir, "changeset-walkthrough", "SKILL.md"))
+    .find((candidate) => existsSync(candidate)) ?? null;
 }
 
 export function composeWalkthroughPrompt(skillPath: string, userMessage: string, outputContract?: string): string {
@@ -496,41 +493,20 @@ export function composeWalkthroughPrompt(skillPath: string, userMessage: string,
   ].join("\n");
 }
 
-export function buildGuideWalkthroughClaudeCommand(prompt: string, model: string = "sonnet", effort?: string): GuideClaudeCommandResult {
-  const organizer = buildGuideClaudeCommand(prompt, model, effort);
-  const allowedTools = [
-    organizer.command[organizer.command.indexOf("--allowedTools") + 1],
-    "Write", "Edit",
-    // The skill's drawing kit and checks: python3 over draw.py, rsvg-convert
-    // for the PNG eyeball pass, bash for check-figures.sh, and the shell
-    // plumbing the skill's steps name.
-    "Bash(python3:*)", "Bash(rsvg-convert:*)", "Bash(bash:*)",
-    "Bash(mkdir:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(sed:*)", "Bash(grep:*)",
-    "Bash(head:*)", "Bash(tail:*)", "Bash(echo:*)", "Bash(cp:*)",
-    "Bash(calldiff:*)", "Bash(npx calldiff:*)", "Bash(codegraph:*)",
-  ].join(",");
-  const disallowedTools = [
-    "NotebookEdit", "WebFetch", "WebSearch",
-    "Bash(curl:*)", "Bash(wget:*)",
-    // The app owns persistence and the review session.
-    "Bash(plannotator:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)",
-  ].join(",");
-  const command = organizer.command.map((arg, i, all) => {
-    if (all[i - 1] === "--tools") return "Agent,Bash,Read,Glob,Grep,Write,Edit";
-    if (all[i - 1] === "--allowedTools") return allowedTools;
-    if (all[i - 1] === "--disallowedTools") return disallowedTools;
-    return arg;
-  });
-  return { command, stdinPrompt: prompt };
-}
-
 export interface GuideClaudeCommandResult {
   command: string[];
   stdinPrompt: string;
 }
 
-export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet", effort?: string): GuideClaudeCommandResult {
+export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet", effort?: string, walkthrough = false): GuideClaudeCommandResult {
   const allowedTools = [
+    // The walkthrough skill writes its brief, figure scripts and guide under
+    // ai-docs/ and runs python3, rsvg-convert and check-figures.sh.
+    ...(walkthrough
+      ? ["Write", "Edit", "Bash(python3:*)", "Bash(rsvg-convert:*)", "Bash(bash:*)", "Bash(mkdir:*)", "Bash(ls:*)",
+         "Bash(cat:*)", "Bash(sed:*)", "Bash(grep:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(echo:*)", "Bash(cp:*)",
+         "Bash(calldiff:*)", "Bash(npx calldiff:*)", "Bash(codegraph:*)"]
+      : []),
     "Agent", "Read", "Glob", "Grep",
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
     "Bash(git show:*)", "Bash(git blame:*)", "Bash(git branch:*)",
@@ -551,10 +527,15 @@ export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet"
   ].join(",");
 
   const disallowedTools = [
-    "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
-    "Bash(python:*)", "Bash(python3:*)", "Bash(node:*)", "Bash(npx:*)",
-    "Bash(bun:*)", "Bash(bunx:*)", "Bash(sh:*)", "Bash(bash:*)", "Bash(zsh:*)",
+    "NotebookEdit", "WebFetch", "WebSearch",
+    "Bash(python:*)", "Bash(node:*)", "Bash(npx:*)",
+    "Bash(bun:*)", "Bash(bunx:*)", "Bash(sh:*)", "Bash(zsh:*)",
     "Bash(curl:*)", "Bash(wget:*)",
+    // The app owns persistence and the review session; the organizer never
+    // writes at all.
+    ...(walkthrough
+      ? ["Bash(plannotator:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)"]
+      : ["Edit", "Write", "Bash(python3:*)", "Bash(bash:*)"]),
   ].join(",");
 
   return {
@@ -567,7 +548,7 @@ export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet"
       "--no-session-persistence",
       "--model", model,
       ...(effort ? ["--effort", effort] : []),
-      "--tools", "Agent,Bash,Read,Glob,Grep",
+      "--tools", walkthrough ? "Agent,Bash,Read,Glob,Grep,Write,Edit" : "Agent,Bash,Read,Glob,Grep",
       "--allowedTools", allowedTools,
       "--disallowedTools", disallowedTools,
     ],
@@ -1410,9 +1391,7 @@ export function createGuideSession(): GuideSession {
         return { command, outputPath, prompt, label: "Guided Review", engine: "codex", model, reasoningEffort, fastMode: fastMode || undefined, ...workflow };
       }
 
-      const { command, stdinPrompt } = skillPath
-        ? buildGuideWalkthroughClaudeCommand(prompt, model, effort)
-        : buildGuideClaudeCommand(prompt, model, effort);
+      const { command, stdinPrompt } = buildGuideClaudeCommand(prompt, model, effort, !!skillPath);
       return { command, stdinPrompt, prompt, cwd, label: "Guided Review", captureStdout: true, engine: "claude", model, effort, ...workflow };
     },
 

@@ -1,21 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { parseCodeTargets, primaryCodeTarget } from "./diagram-svg";
-
-describe("parseCodeTargets", () => {
-  test("names files in author order, trims a revision suffix, skips blanks", () => {
-    expect(parseCodeTargets("a.ts:10-20, b.ts@HEAD~1, , :::")).toEqual([{ path: "a.ts", line: 10 }, { path: "b.ts" }]);
-    expect(parseCodeTargets(null)).toEqual([]);
-  });
-});
+import { primaryCodeTarget } from "./diagram-svg";
 
 describe("primaryCodeTarget", () => {
-  test("keeps the first line of a range so a click can scroll to it", () => {
-    expect(primaryCodeTarget("a.ts:40-66, b.ts")).toEqual({ path: "a.ts", line: 40 });
-    expect(primaryCodeTarget("a.ts:7")).toEqual({ path: "a.ts", line: 7 });
+  test("keeps the first entry's line range so a click can scroll to it", () => {
+    expect(primaryCodeTarget("a/b.ts:40-66, c.ts")).toEqual({ filePath: "a/b.ts", line: 40, lineEnd: 66 });
+    expect(primaryCodeTarget("a/b.ts:7")).toEqual({ filePath: "a/b.ts", line: 7, lineEnd: undefined });
   });
 
-  test("omits the line when the suffix is a revision or absent", () => {
-    expect(primaryCodeTarget("a.ts@HEAD~1")).toEqual({ path: "a.ts" });
+  test("trims a revision suffix and names nothing for an empty value", () => {
+    expect(primaryCodeTarget("a/b.ts@HEAD~1")).toEqual({ filePath: "a/b.ts" });
     expect(primaryCodeTarget("")).toBeNull();
+    expect(primaryCodeTarget(null)).toBeNull();
   });
 });

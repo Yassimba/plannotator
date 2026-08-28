@@ -425,14 +425,19 @@ describe("guide walkthrough workflow", () => {
   const { tmpdir } = require("node:os") as typeof import("node:os");
   const { join } = require("node:path") as typeof import("node:path");
   let home: string;
-  let savedHome: string | undefined;
+  const ENV = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME"] as const;
+  let saved: Record<string, string | undefined>;
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "pn-home-"));
-    savedHome = process.env.HOME;
+    saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+    for (const k of ENV) delete process.env[k];
     process.env.HOME = home;
   });
   afterEach(() => {
-    process.env.HOME = savedHome;
+    for (const k of ENV) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
     rmSync(home, { recursive: true, force: true });
   });
   const installSkill = () => {
@@ -442,10 +447,10 @@ describe("guide walkthrough workflow", () => {
     return join(dir, "SKILL.md");
   };
 
-  it("resolves the skill from the agent trees, or null when it is not installed", () => {
-    expect(resolveWalkthroughSkill(home)).toBeNull();
+  it("resolves the skill from the global skill roots, or null when it is not installed", () => {
+    expect(resolveWalkthroughSkill()).toBeNull();
     const path = installSkill();
-    expect(resolveWalkthroughSkill(home)).toBe(path);
+    expect(resolveWalkthroughSkill()).toBe(path);
   });
 
   it("a claude launch runs the skill when installed, with the tools it needs and without the app's own CLI", async () => {
