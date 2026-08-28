@@ -206,6 +206,10 @@ export interface MarkerBuildOptions {
    *  OMITTED entirely (never `--sandbox disabled`), deferring to the user's
    *  own Cursor Agent sandbox configuration. */
   cursorSandbox?: boolean;
+  /** Guide walkthrough jobs run the changeset-walkthrough skill, which writes
+   *  its brief, figure scripts and guide under ai-docs/ and runs python3 and
+   *  rsvg-convert. Each engine lifts its read-only guard for that job only. */
+  walkthrough?: boolean;
 }
 
 /** Stable ids of the marker engines — the single union every cast/lookup
@@ -401,13 +405,13 @@ function cursorBuildArgv(
     "agent",
     "-p",
     "--mode",
-    "ask",
+    opts?.walkthrough ? "agent" : "ask",
     "--output-format",
     "stream-json",
     "--stream-partial-output",
     "--trust",
     ...(cwd ? ["--workspace", cwd] : []),
-    ...(opts?.cursorSandbox === false ? [] : ["--sandbox", "enabled"]),
+    ...(opts?.cursorSandbox === false || opts?.walkthrough ? [] : ["--sandbox", "enabled"]),
     ...(useModel ? ["--model", model] : []),
     // Prompt is the trailing positional arg — agent reads it from argv, not stdin.
     prompt,
@@ -490,7 +494,7 @@ function opencodeFormatLogEvent(event: MarkerStreamEvent): string | null {
  * trailing positional arg. `--model` is `provider/model` and is omitted when
  * empty so OpenCode uses the configured default.
  */
-function opencodeBuildArgv(prompt: string, model?: string, cwd?: string): string[] {
+function opencodeBuildArgv(prompt: string, model?: string, cwd?: string, opts?: MarkerBuildOptions): string[] {
   const useModel = !!model && model.trim().length > 0;
   return [
     "opencode",
@@ -498,7 +502,7 @@ function opencodeBuildArgv(prompt: string, model?: string, cwd?: string): string
     "--format",
     "json",
     "--agent",
-    "plan",
+    opts?.walkthrough ? "build" : "plan",
     ...(useModel ? ["--model", model] : []),
     ...(cwd ? ["--dir", cwd] : []),
     // Message (prompt) is the trailing positional arg.
@@ -741,8 +745,7 @@ function piBuildArgv(prompt: string, model?: string, cwd?: string, opts?: Marker
     // OpenCode, whose CLIs offer no tool-restriction flags at all and so run
     // with Bash unrestricted too. PR jobs additionally run inside disposable
     // worktrees, bounding the blast radius of anything Bash could still do.
-    "--exclude-tools",
-    "edit,write",
+    ...(opts?.walkthrough ? [] : ["--exclude-tools", "edit,write"]),
     ...(useModel ? ["--model", model] : []),
     // Pi's unified reasoning knob (thinking level) applies to whatever model
     // is selected; omitted ⇒ Pi's own default (medium).
@@ -866,7 +869,7 @@ function copilotFormatLogEvent(event: MarkerStreamEvent): string | null {
  * the value of `-p`, passed last. `--model` is omitted when empty or `auto`
  * so Copilot picks its own default.
  */
-function copilotBuildArgv(prompt: string, model?: string, cwd?: string): string[] {
+function copilotBuildArgv(prompt: string, model?: string, cwd?: string, opts?: MarkerBuildOptions): string[] {
   const useModel = !!model && model.trim().length > 0 && model.toLowerCase() !== "auto";
   return [
     "copilot",
@@ -876,7 +879,10 @@ function copilotBuildArgv(prompt: string, model?: string, cwd?: string): string[
     "--no-ask-user",
     "--no-auto-update",
     "--disable-builtin-mcps",
-    "--deny-tool=write",
+    ...(opts?.walkthrough
+      ? ["--allow-tool=write", "--allow-tool=shell(python3:*)", "--allow-tool=shell(rsvg-convert:*)", "--allow-tool=shell(bash:*)",
+         "--allow-tool=shell(mkdir:*)", "--allow-tool=shell(ls:*)", "--allow-tool=shell(cat:*)", "--allow-tool=shell(sed:*)", "--allow-tool=shell(grep:*)"]
+      : ["--deny-tool=write"]),
     // Deny rules take precedence over every allow rule (Copilot's documented
     // permission model), and match at first-level-subcommand granularity
     // ("git push", "gh pr create") — probe-verified: with these in place,

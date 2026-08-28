@@ -555,6 +555,24 @@ that exports, and it writes patch-then-envelope like the in-app autosave. The
 shelf key is resolved the same way `createGuideStoreSession` resolves it, or an
 import would land where the app never looks.
 
+**Walkthrough workflow.** A Claude guide launch runs the user's
+`changeset-walkthrough` skill when it is installed (`resolveWalkthroughSkill`:
+`~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills`), so the in-app
+guide is the same artifact the skill produces by hand: chaptered,
+diagram-design figures bound to changed files, ADHD-shaped prose.
+`composeWalkthroughPrompt` binds the skill to the job (range = the launch
+diff, no `plannotator guide import`/`review`, final answer = guide JSON with
+diagrams inline) and every engine runs it: Claude through
+`buildGuideWalkthroughClaudeCommand` (allowlist widened with Write, Edit,
+python3, rsvg-convert, bash; the app's own CLI and git writes denied), Codex
+in its workspace-write sandbox unchanged, and the marker engines with
+`MarkerBuildOptions.walkthrough` lifting their read-only guard for that job
+(Cursor `--mode agent` without the sandbox, OpenCode `--agent build`, Pi
+without `--exclude-tools edit,write`, Copilot with write and python3/bash
+allowed). Launch body `workflow: "organizer"` opts back into the prose
+organizer; `"walkthrough"` without the skill fails loud. The empty state's
+Method picker sends it.
+
 Elements in that SVG bind to source with `data-code` — a comma-separated list
 of changed-file paths, first entry primary — parsed by
 `@plannotator/core/diagram-svg` (no imports, so core stays dependency-free).
