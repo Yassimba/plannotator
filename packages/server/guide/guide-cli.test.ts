@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadGuide, saveGuide, saveGuidePatch, type SavedGuideEnvelope } from "@plannotator/shared/guide-store";
+import { listAllSavedGuides, loadGuide, saveGuide, saveGuidePatch, type SavedGuideEnvelope } from "@plannotator/shared/guide-store";
 import { decompress } from "@plannotator/shared/compress";
 import { decrypt } from "@plannotator/shared/crypto";
 import { GUIDE_VIEWER_MANIFEST } from "@plannotator/shared/guide-viewer-manifest";
@@ -139,6 +139,38 @@ describe("plannotator guide", () => {
     review: { gitRef: "origin/main...HEAD", base: "origin/main" },
     generator: { engine: "claude-code", model: "claude-opus-5" },
   };
+
+  test("import puts an authored guide on the shelf so the app can open it", async () => {
+    execFileSync("git", ["init", "-q", "-b", "feature/refresh"], { cwd: workDir });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: workDir });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:acme/widgets.git"], { cwd: workDir });
+    writeFileSync(join(workDir, "guide.json"), JSON.stringify({ ...AUTHORED, sections: [{ ...AUTHORED.sections[0], diagrams: ['<svg viewBox="0 0 10 10"><g data-code="src/auth.ts"/></svg>'] }] }));
+    writeFileSync(join(workDir, "w.patch"), TWO_FILE_PATCH);
+
+    const res = await runGuideCli(["import", "--guide", "guide.json", "--patch", "w.patch"], {}, workDir);
+    expect(res.code).toBe(0);
+
+    const id = res.stdout!.trim();
+    const found = listAllSavedGuides().find((g) => g.id === id);
+    expect(found).toBeDefined();
+    // The label defaults to the branch, and the figure survives onto the shelf.
+    expect(found!.envelope.label).toBe("feature/refresh");
+    expect(found!.envelope.guide.sections[0].diagrams?.[0]).toContain('data-code="src/auth.ts"');
+    // The envelope must never reference a patch that is not on disk.
+    expect(existsSync(join(dataDir, "guides", found!.repoKey, found!.envelope.review!.patchFile))).toBe(true);
+    // An imported guide exports, so it cleared the same strict bar.
+    expect((await runGuideCli(["export", "--id", id, "--out", "-"], {}, workDir)).code).toBe(0);
+  });
+
+  test("import refuses a guide naming a file the patch does not have", async () => {
+    writeFileSync(join(workDir, "guide.json"), JSON.stringify({ ...AUTHORED, sections: [{ ...AUTHORED.sections[0], diffs: [{ file: "src/nope.ts", summary: "Not in the patch." }] }] }));
+    writeFileSync(join(workDir, "w.patch"), TWO_FILE_PATCH);
+    const res = await runGuideCli(["import", "--guide", "guide.json", "--patch", "w.patch"], {}, workDir);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain("src/nope.ts");
+    expect(res.stderr).toContain("src/auth.ts"); // lists what IS in the patch
+    expect(listAllSavedGuides()).toHaveLength(0);
+  });
 
   test("export --guide/--patch validates the guide against the patch, infers provenance from git, and wraps it", async () => {
     execFileSync("git", ["init", "-q", "-b", "feature/refresh"], { cwd: workDir });

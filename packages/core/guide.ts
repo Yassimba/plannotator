@@ -38,6 +38,12 @@ export interface GuideSection {
    *  deliberate prose-only context section (no diffs, real overview text) is
    *  a valid model output and is preserved as-is rather than dropped. */
   diffs: GuideDiffRef[];
+  /** Inline SVG figures for this chapter, in reading order. Their elements may
+   *  carry `data-code` binding them to files in this changeset; clicking one
+   *  reveals that file. A chapter that needs to show a shape before showing
+   *  what moved in it needs two, so this is a list. Usually absent — most
+   *  chapters are explained by prose. */
+  diagrams?: string[];
 }
 
 export interface CodeGuideOutput {

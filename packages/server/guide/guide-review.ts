@@ -48,6 +48,7 @@ export const GUIDE_SCHEMA_JSON = JSON.stringify({
         properties: {
           title: { type: "string" },
           overview: { type: "string" },
+          diagrams: { type: "array", items: { type: "string" } },
           diffs: {
             type: "array",
             items: {
@@ -228,6 +229,27 @@ never shares a chapter.
     implications; the summary says what this specific file contributes.
     For a trivial change (import bump, rename fallout), one short clause
     is enough.
+
+#### Section diagram (optional, usually absent)
+A section may carry \`diagram\`: one inline \`<svg>...</svg>\` string, rendered
+above the file list. Add one ONLY when the chapter's shape is the thing the
+reviewer needs and prose cannot carry it: a request crossing four components,
+a state machine that gained a transition, a dependency that reversed
+direction. A figure that just lists the files again is worse than no figure.
+Most guides have zero. One is common. Never more than two.
+
+Bind the figure to the code. Any element may carry \`data-code\` naming the
+files it stands for, comma-separated, first one primary:
+  <g data-code="packages/server/review.ts">
+  <g data-code="packages/core/guide.ts, packages/core/guide-format.ts">
+Clicking that element reveals the first file's diff, so a bound path MUST be
+one of the changed files, spelled exactly as in the Changed files list.
+Binding is what makes the figure navigable; an unbound box is decoration.
+
+Write plain SVG: shapes, paths, and \`<text>\`. Set \`viewBox\` and no fixed
+\`width\`/\`height\` so it scales to the column. Use \`currentColor\` for strokes
+and text so it reads in both themes. No scripts, no event handlers, no
+external images, no foreignObject — they are stripped before rendering.
 
 ### unplacedFiles
 Always include unplacedFiles. Use an empty array when every changed file is
@@ -818,7 +840,13 @@ function sanitizeGuideSection(raw: unknown): GuideSection | null {
   // Keeping the section (titled) beats dropping it: its files were PLACED by
   // the model, so they're not in unplacedFiles and dropping would silently
   // orphan them from the guide's coverage story.
-  return { title: title.trim() ? title : "Untitled section", overview, diffs };
+  // Carried verbatim; the SVG is sanitized where it is rendered, which is the
+  // only step every producer of a guide passes through. Blank entries are
+  // dropped rather than rendered as empty figures.
+  const diagrams = Array.isArray(s.diagrams)
+    ? s.diagrams.filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+    : [];
+  return { title: title.trim() ? title : "Untitled section", overview, diffs, ...(diagrams.length ? { diagrams } : {}) };
 }
 
 /** Sanitizes a raw sections array (see `sanitizeGuideSection`). Shared by the

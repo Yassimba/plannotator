@@ -43,3 +43,14 @@ describe("renderInlineMarkdown", () => {
     expect((linkNodes[1] as { type: string; props: { children?: unknown } }).props.children).toBe("italic");
   });
 });
+
+describe("code anchors", () => {
+  it("renders a code: link as a bound anchor that navigates nowhere on its own", () => {
+    const nodes = renderInlineMarkdown("see [the spawn site](code:src/auth.ts:214-223) here");
+    const anchor = nodes.find(isElement) as { type: string; props: Record<string, unknown> };
+    expect(anchor.type).toBe("a");
+    expect(anchor.props["data-code"]).toBe("src/auth.ts:214-223");
+    expect(anchor.props.href).toBe("#");
+    expect(anchor.props.children).toBe("the spawn site");
+  });
+});
