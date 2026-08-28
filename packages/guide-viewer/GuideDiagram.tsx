@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Maximize2 } from 'lucide-react';
 import { CODE_BINDING_ATTR, primaryCodeTarget, type CodeTarget } from '@plannotator/core/diagram-svg';
 import { sanitizeDiagramSvg } from './sanitizeDiagramSvg';
 
@@ -58,17 +59,52 @@ export function GuideDiagram({
     onRevealFile(target.path, target.line);
   };
 
+  // Figures are drawn on diagram-design's paper (light ground, ink text), so in
+  // every theme they sit as a plate: a hairline frame in the theme's border,
+  // ink set for currentColor figures, and one hover affordance for the zoom.
+  const plate =
+    'guide-diagram relative overflow-hidden rounded-lg border bg-[#f5f5f5] text-[#2d3142] [&_svg]:block [&_svg]:h-auto [&_svg]:w-full [&_[data-code]]:cursor-pointer [&_[data-code]:hover]:[filter:brightness(0.93)] [&_[data-code]]:transition-[filter] [&_[data-code]]:duration-150';
+  const figure = (
+    <div
+      className={
+        zoomed
+          ? `${plate} border-border/60 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.55)] [&_svg]:max-h-[calc(100dvh-6rem)] [&_svg]:w-auto [&_svg]:max-w-full`
+          : `${plate} group mt-5 cursor-zoom-in border-border/50 transition-colors duration-200 hover:border-primary/50`
+      }
+      title={zoomed ? undefined : 'Enlarge · click a bound box to open its code'}
+      onClick={handleClick}
+    >
+      <div dangerouslySetInnerHTML={{ __html: clean }} />
+      {!zoomed && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-[#2d3142]/85 px-1.5 py-1 font-mono text-[10px] text-[#f5f5f5] opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+        >
+          <Maximize2 size={11} />
+          Enlarge
+        </span>
+      )}
+    </div>
+  );
+
+  if (!zoomed) return figure;
+
   return (
     <div
-      className={`guide-diagram [&_svg]:h-auto [&_svg]:w-full [&_[data-code]]:cursor-pointer ${
-        zoomed
-          ? 'fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-background/95 p-6 [&_svg]:max-h-full [&_svg]:max-w-full'
-          : 'mt-4 cursor-zoom-in'
-      }`}
-      data-guide-diagram-zoom={zoomed ? '' : undefined}
-      title={zoomed ? 'Esc or click to zoom out · click a bound box to open its code' : 'Click to enlarge · click a bound box to open its code'}
-      onClick={handleClick}
-      dangerouslySetInnerHTML={{ __html: clean }}
-    />
+      data-guide-diagram-zoom
+      className="fixed inset-0 z-50 flex cursor-zoom-out flex-col items-center justify-center gap-3 bg-background/90 p-8 backdrop-blur-sm motion-safe:[animation:guide-zoom-in_160ms_cubic-bezier(0.16,1,0.3,1)]"
+      onClick={(event) => {
+        // The backdrop zooms out; the plate's own handler decides bound vs. canvas.
+        if (event.target === event.currentTarget) setZoomed(false);
+      }}
+    >
+      <style>{'@keyframes guide-zoom-in{from{opacity:0;transform:scale(0.98)}to{opacity:1;transform:none}}'}</style>
+      <div className="max-h-full w-full max-w-[1400px]" onClick={(event) => event.stopPropagation()}>
+        {figure}
+      </div>
+      <p className="font-mono text-[11px] text-muted-foreground">
+        Click a bound box to open its code <span className="mx-1.5 text-muted-foreground/40">·</span> Esc or click outside to zoom out
+      </p>
+    </div>
   );
 }
