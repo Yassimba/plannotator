@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 import { loadConfig, resolveCursorSandbox } from "../config";
@@ -444,6 +445,83 @@ function buildWorkspaceGuideUserMessage(
     patch,
     "```",
   ].join("\n");
+}
+
+/**
+ * The figure-led walkthrough workflow (`workflow: "walkthrough"`). The guide
+ * job runs the user's `changeset-walkthrough` skill instead of the organizer
+ * prompt, so an in-app guide is the same artifact the skill produces by
+ * hand: chaptered, diagram-design figures bound to changed files, ADHD-shaped
+ * prose. Every engine runs it: Claude through a widened allowlist, Codex in
+ * its workspace-write sandbox, the marker engines with their read-only guard
+ * lifted for the job (MarkerBuildOptions.walkthrough).
+ */
+export type GuideWorkflow = "organizer" | "walkthrough";
+
+const WALKTHROUGH_SKILL_DIRS = [".claude/skills", ".agents/skills", ".codex/skills"];
+
+/** Path of the installed changeset-walkthrough SKILL.md, or null when absent. */
+export function resolveWalkthroughSkill(home: string = process.env.HOME || homedir()): string | null {
+  for (const dir of WALKTHROUGH_SKILL_DIRS) {
+    const candidate = join(home, dir, "changeset-walkthrough", "SKILL.md");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export function composeWalkthroughPrompt(skillPath: string, userMessage: string, outputContract?: string): string {
+  return [
+    "# Guided Review: figure-led walkthrough",
+    "",
+    `Read ${skillPath} and follow it end to end. It is the whole method; this`,
+    "message only binds it to this job:",
+    "",
+    "- Step 1: the range is the diff below. The working directory is the",
+    "  repository; the Changed files list is authoritative and every path you",
+    "  write must appear on it, spelled identically. Do not re-derive the range.",
+    "- Steps 2–7: run as written. Write the brief, figure record, figure scripts",
+    "  and guide under ai-docs/walkthroughs/<slug>/ in the repository.",
+    "- Step 8 does not apply: do not run `plannotator guide import` or",
+    "  `plannotator review`. Plannotator launched this job and persists the",
+    "  result itself.",
+    "- Final answer: the guide JSON only — title, intent, sections (each with",
+    "  overview, diffs, and diagrams as inline SVG markup with the XML",
+    "  declaration removed), unplacedFiles. Every changed file placed exactly",
+    "  once. A section's diagrams must keep their data-code attributes.",
+    ...(outputContract ? ["", outputContract] : []),
+    "",
+    "---",
+    "",
+    userMessage,
+  ].join("\n");
+}
+
+export function buildGuideWalkthroughClaudeCommand(prompt: string, model: string = "sonnet", effort?: string): GuideClaudeCommandResult {
+  const organizer = buildGuideClaudeCommand(prompt, model, effort);
+  const allowedTools = [
+    organizer.command[organizer.command.indexOf("--allowedTools") + 1],
+    "Write", "Edit",
+    // The skill's drawing kit and checks: python3 over draw.py, rsvg-convert
+    // for the PNG eyeball pass, bash for check-figures.sh, and the shell
+    // plumbing the skill's steps name.
+    "Bash(python3:*)", "Bash(rsvg-convert:*)", "Bash(bash:*)",
+    "Bash(mkdir:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(sed:*)", "Bash(grep:*)",
+    "Bash(head:*)", "Bash(tail:*)", "Bash(echo:*)", "Bash(cp:*)",
+    "Bash(calldiff:*)", "Bash(npx calldiff:*)", "Bash(codegraph:*)",
+  ].join(",");
+  const disallowedTools = [
+    "NotebookEdit", "WebFetch", "WebSearch",
+    "Bash(curl:*)", "Bash(wget:*)",
+    // The app owns persistence and the review session.
+    "Bash(plannotator:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)",
+  ].join(",");
+  const command = organizer.command.map((arg, i, all) => {
+    if (all[i - 1] === "--tools") return "Agent,Bash,Read,Glob,Grep,Write,Edit";
+    if (all[i - 1] === "--allowedTools") return allowedTools;
+    if (all[i - 1] === "--disallowedTools") return disallowedTools;
+    return arg;
+  });
+  return { command, stdinPrompt: prompt };
 }
 
 export interface GuideClaudeCommandResult {
@@ -975,6 +1053,8 @@ export interface GuideSessionBuildCommandResult {
   fastMode?: boolean;
   /** Pi's unified reasoning level (marker engines only). */
   thinking?: string;
+  /** Which method wrote the guide; absent means the organizer prompt. */
+  workflow?: GuideWorkflow;
 }
 
 export interface GuideSessionJobSummary {
@@ -1298,25 +1378,42 @@ export function createGuideSession(): GuideSession {
       // marker branch: per-job nonce embedded in the prompt, recovered from
       // job.prompt at parse time in onJobComplete below. captureStdout is
       // required — the marker block comes back on stdout NDJSON.
+      // Walkthrough by default when the skill is installed, on every engine;
+      // `workflow: "organizer"` opts back into the prose-only prompt, and
+      // asking for the walkthrough without the skill fails loud.
+      const skillPath = config?.workflow === "organizer" ? null : resolveWalkthroughSkill();
+      if (!skillPath && config?.workflow === "walkthrough") {
+        throw new Error("The figure-led walkthrough needs the changeset-walkthrough skill installed under ~/.claude/skills, ~/.agents/skills or ~/.codex/skills.");
+      }
+      const workflow = skillPath ? { workflow: "walkthrough" as const } : {};
+
       const markerEngine = MARKER_ENGINES[engine as MarkerEngineId];
       if (markerEngine) {
         const thinking = typeof config?.thinking === "string" && config.thinking ? config.thinking : undefined;
         const nonce = makeMarkerNonce();
-        const markerPrompt = composeGuideMarkerPrompt(userMessage, nonce, extraInstructions);
-        const { command } = buildMarkerCommand(markerEngine, markerPrompt, model || undefined, cwd, { thinking, cursorSandbox: resolveCursorSandbox(loadConfig()) });
-        return { command, prompt: markerPrompt, cwd, label: "Guided Review", captureStdout: true, engine: markerEngine.id, model, thinking };
+        const markerPrompt = skillPath
+          ? composeWalkthroughPrompt(skillPath, userMessage, buildGuideMarkerOutputContract(nonce))
+          : composeGuideMarkerPrompt(userMessage, nonce, extraInstructions);
+        const { command } = buildMarkerCommand(markerEngine, markerPrompt, model || undefined, cwd, { thinking, cursorSandbox: resolveCursorSandbox(loadConfig()), walkthrough: !!skillPath });
+        return { command, prompt: markerPrompt, cwd, label: "Guided Review", captureStdout: true, engine: markerEngine.id, model, thinking, ...workflow };
       }
 
-      const prompt = composeGuideMethodology(extraInstructions) + "\n\n---\n\n" + userMessage;
+      const prompt = skillPath
+        ? composeWalkthroughPrompt(skillPath, userMessage)
+        : composeGuideMethodology(extraInstructions) + "\n\n---\n\n" + userMessage;
 
       if (engine === "codex") {
+        // Codex exec's workspace-write sandbox already lets the skill write
+        // under the repo and run python3; only the prompt changes.
         const outputPath = generateGuideOutputPath();
         const command = await buildGuideCodexCommand({ cwd, outputPath, prompt, model: model || undefined, reasoningEffort, fastMode });
-        return { command, outputPath, prompt, label: "Guided Review", engine: "codex", model, reasoningEffort, fastMode: fastMode || undefined };
+        return { command, outputPath, prompt, label: "Guided Review", engine: "codex", model, reasoningEffort, fastMode: fastMode || undefined, ...workflow };
       }
 
-      const { command, stdinPrompt } = buildGuideClaudeCommand(prompt, model, effort);
-      return { command, stdinPrompt, prompt, cwd, label: "Guided Review", captureStdout: true, engine: "claude", model, effort };
+      const { command, stdinPrompt } = skillPath
+        ? buildGuideWalkthroughClaudeCommand(prompt, model, effort)
+        : buildGuideClaudeCommand(prompt, model, effort);
+      return { command, stdinPrompt, prompt, cwd, label: "Guided Review", captureStdout: true, engine: "claude", model, effort, ...workflow };
     },
 
     async onJobComplete({ job, meta, changedFiles, launchReview }) {

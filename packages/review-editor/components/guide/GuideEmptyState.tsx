@@ -20,6 +20,11 @@ import { useGuideLaunch } from '../../hooks/guide/useGuideLaunch';
 
 type Option = { value: string; label: string };
 
+const GUIDE_WORKFLOWS: Option[] = [
+  { value: 'walkthrough', label: 'Figure-led walkthrough' },
+  { value: 'organizer', label: 'Prose organizer' },
+];
+
 /** "2d ago" style age for the previous-guides rows (local convention — same
  *  shape as PRCommentsTab's formatRelativeTime, taking epoch ms instead). */
 function formatSavedAge(savedAt: number): string {
@@ -202,6 +207,10 @@ export const GuideEmptyState: React.FC<GuideEmptyStateProps> = ({ capabilities, 
   // read the persisted value fresh (useGuideLaunch.buildParams), so this local
   // state is only the textarea's view of it.
   const [instructions, setInstructions] = useState('');
+  // The figure-led walkthrough (changeset-walkthrough skill) or the prose
+  // organizer, on every engine. The server falls back to the organizer when
+  // the skill is not installed, so "walkthrough" is a safe default.
+  const [workflow, setWorkflow] = useState<'walkthrough' | 'organizer'>('walkthrough');
   const [showInstructions, setShowInstructions] = useState(false);
   const hasInstructions = instructions.trim().length > 0;
   // Server-stored (#1265, GET/PUT /api/agents/guide-instructions): the text
@@ -390,7 +399,7 @@ export const GuideEmptyState: React.FC<GuideEmptyStateProps> = ({ capabilities, 
     setLaunchError(null);
     // Launch-param shapes live in useGuideLaunch (shared with GuideView's
     // Regenerate hint) and mirror AgentsTab's buildGuideLaunch exactly.
-    const params: AgentLaunchParams = launch.buildParams(instructions);
+    const params: AgentLaunchParams = { ...launch.buildParams(instructions), workflow };
     try {
       await launchJob(params);
     } catch (err) {
@@ -485,6 +494,12 @@ export const GuideEmptyState: React.FC<GuideEmptyStateProps> = ({ capabilities, 
               {engine === 'claude' && (
                 <InlinePicker label="Effort" value={guideClaudeEffort} options={CLAUDE_EFFORT} onChange={setGuideClaudeEffort} />
               )}
+              <InlinePicker
+                label="Method"
+                value={workflow}
+                options={GUIDE_WORKFLOWS}
+                onChange={(v) => setWorkflow(v === 'organizer' ? 'organizer' : 'walkthrough')}
+              />
               {engine === 'codex' && (
                 <InlinePicker label="Reasoning" value={guideCodexReasoning} options={codexReasoningOptions(guideCodexModel)} onChange={setGuideCodexReasoning} />
               )}
