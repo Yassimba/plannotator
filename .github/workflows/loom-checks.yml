@@ -1,0 +1,43 @@
+name: Loom checks
+
+on:
+  pull_request:
+    branches: [loom/current]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loom-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Loom checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run check:release-version
+      - name: Typecheck with the workspace's pinned TypeScript
+        run: PATH="$PWD/packages/ui/node_modules/.bin:$PATH" bun run typecheck
+      # storage.ts captures its data directory at import time. Keep fixtures in
+      # other files from initializing that module with their temporary paths.
+      - run: bun test --isolate
+      - name: Check sync behavior
+        run: python3 .github/scripts/loom-sync.test.py
+      - name: Build the review UI, plan UI, and standalone CLI
+        run: |
+          bun run build:review
+          bun run build:hook
+          version=$(node -p 'require("./package.json").version')
+          bun build apps/hook/server/index.ts --compile --no-compile-autoload-bunfig \
+            --define "__CLI_VERSION__=\"$version\"" --outfile "$RUNNER_TEMP/plannotator-cli"
+          "$RUNNER_TEMP/plannotator-cli" --version
