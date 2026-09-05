@@ -28,7 +28,9 @@ jobs:
       - run: bun run check:release-version
       - name: Typecheck with the workspace's pinned TypeScript
         run: PATH="$PWD/packages/ui/node_modules/.bin:$PATH" bun run typecheck
-      - run: bun test
+      # storage.ts captures its data directory at import time. Keep fixtures in
+      # other files from initializing that module with their temporary paths.
+      - run: bun test --isolate
       - name: Check sync behavior
         run: python3 .github/scripts/loom-sync.test.py
       - name: Build the review UI, plan UI, and standalone CLI
