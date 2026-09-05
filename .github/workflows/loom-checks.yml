@@ -39,5 +39,5 @@ jobs:
           bun run build:hook
           version=$(node -p 'require("./package.json").version')
           bun build apps/hook/server/index.ts --compile --no-compile-autoload-bunfig \
-            --define "__CLI_VERSION__=\"$version\"" --outfile /tmp/plannotator
-          /tmp/plannotator --version
+            --define "__CLI_VERSION__=\"$version\"" --outfile "$RUNNER_TEMP/plannotator-cli"
+          "$RUNNER_TEMP/plannotator-cli" --version
