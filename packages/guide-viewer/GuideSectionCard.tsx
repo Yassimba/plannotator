@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react';
 import type { GuideSection } from '@plannotator/core/guide';
 import type { DiffFile } from './types';
 import { renderMarkdownProse } from './renderMarkdownProse';
+import { GuideDiagram, codeTargetFromClick } from './GuideDiagram';
 import { useGuideHost } from './host';
 import { GuideFileCard } from './GuideFileCard';
 
@@ -72,7 +73,13 @@ interface GuideSectionCardProps {
   focusedFile: string | null;
   revealTarget: { filePath: string; token: number } | null;
   onActivate: (filePath: string) => void;
-  onRequestReveal: (filePath: string) => void;
+  onRequestReveal: (filePath: string, line?: number) => void;
+  /**
+   * Document mode (GuideView, figure-led guides): the chapter is a plain
+   * section of one continuous document and its code opens in the guide's
+   * single peek, so no file cards render here. Default: the original card.
+   */
+  document?: boolean;
 }
 
 /**
@@ -92,8 +99,10 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
   revealTarget,
   onActivate,
   onRequestReveal,
+  document: documentMode = false,
 }) => {
   const [collapsedOverride, setCollapsedOverride] = useState<boolean | null>(null);
+  const [codeDismissed, setCodeDismissed] = useState(false);
   const host = useGuideHost();
   const cardRef = useRef<HTMLDivElement>(null);
   const position = `${String(index + 1).padStart(2, '0')} / ${String(total).padStart(2, '0')}`;
@@ -112,6 +121,21 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
     ? revealTarget
     : null;
 
+  /**
+   * A chapter with a figure leads with the figure: the diagram gets the card's
+   * full width and the diffs stay closed until the reader asks for one, by
+   * clicking a bound element or a file chip. A chapter without a figure keeps
+   * the original prose-column-plus-diffs layout, where the code IS the chapter.
+   */
+  const figureLed = (section.diagrams?.length ?? 0) > 0;
+  const focusHere = focusedFile !== null && files.some((file) => file.path === focusedFile);
+  const codeOpen = !figureLed || (focusHere && !codeDismissed);
+
+  // A new reveal reopens the code after the reader closed it.
+  useEffect(() => {
+    if (targetBelongsHere) setCodeDismissed(false);
+  }, [targetBelongsHere?.token]);
+
   // Reopen a reviewed chapter before its target file shell force-mounts and
   // scrolls itself into view. Reviewed persistence remains unchanged because
   // this is only the local visual override.
@@ -127,6 +151,58 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
     setCollapsedOverride(null);
     onToggleReviewed?.();
   };
+
+  /** A prose anchor (`[text](path:from-to)`) opens its file like a figure box does. */
+  const handleProseClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = codeTargetFromClick(event);
+    if (!target) return;
+    event.preventDefault();
+    onRequestReveal(target.filePath, target.line);
+  };
+
+  if (documentMode) {
+    return (
+      <section ref={cardRef} id={`guide-section-${index}`} className="scroll-mt-4 border-t border-border/40 pt-6">
+        <div className="flex items-baseline gap-3">
+          <span className="font-mono text-[11px] text-muted-foreground/60">{String(index + 1).padStart(2, '0')}</span>
+          <h2 className="flex-1 text-[17px] font-semibold leading-snug text-foreground [text-wrap:balance]">{section.title}</h2>
+          {showReviewed && (
+            <button
+              type="button"
+              onClick={handleToggleReviewed}
+              className="flex flex-shrink-0 items-center gap-1.5 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+              title={reviewed ? 'Un-mark as reviewed' : 'Mark as reviewed'}
+            >
+              <Checkbox checked={reviewed} />
+              Reviewed
+            </button>
+          )}
+        </div>
+        {section.overview && (
+          <div className="mt-3 max-w-[72ch] space-y-2.5" onClick={handleProseClick}>
+            {renderMarkdownProse(section.overview)}
+          </div>
+        )}
+        {section.diagrams?.map((svg, i) => (
+          <GuideDiagram key={i} svg={svg} onRevealFile={onRequestReveal} />
+        ))}
+        {section.diffs.length > 0 && (
+          <div className="mt-4 grid gap-1.5 sm:grid-cols-2">
+            {section.diffs.map((ref) => (
+              <FileChip
+                key={ref.file}
+                filePath={ref.file}
+                summary={ref.summary}
+                file={filesByPath.get(ref.file)}
+                active={focusedFile === ref.file}
+                onClick={() => onRequestReveal(ref.file)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  }
 
   if (isCollapsed) {
     return (
@@ -161,10 +237,25 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
 
   return (
     <div ref={cardRef} className="scroll-mt-4 overflow-clip rounded-lg border border-border/50 bg-card">
-      {/* Stacked below md; a proportional chapter column on tablets; the fixed 440px column from lg up (desktop unchanged). */}
-      <div className="md:grid md:grid-cols-[minmax(260px,36%)_minmax(0,1fr)] lg:grid-cols-[440px_minmax(0,1fr)]">
-        <div className="border-b border-border/40 md:border-b-0 md:border-r">
-          <div className="px-4 py-4 md:sticky md:top-0 md:flex md:max-h-[calc(100dvh-48px)] md:flex-col md:overflow-y-auto md:overflow-x-hidden md:px-6 md:py-5">
+      {/* Prose-led (no figure): the original fixed chapter column beside the diffs.
+          Figure-led: the figure takes the width, and the diffs open beside it on demand. */}
+      <div
+        className={
+          figureLed
+            ? codeOpen
+              ? 'md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,44%)] lg:grid-cols-[minmax(0,1fr)_minmax(400px,38%)]'
+              : ''
+            : 'md:grid md:grid-cols-[minmax(260px,36%)_minmax(0,1fr)] lg:grid-cols-[440px_minmax(0,1fr)]'
+        }
+      >
+        <div className={codeOpen ? 'border-b border-border/40 md:border-b-0 md:border-r' : ''}>
+          <div
+            className={
+              figureLed
+                ? 'px-4 py-4 md:px-6 md:py-5'
+                : 'px-4 py-4 md:sticky md:top-0 md:flex md:max-h-[calc(100dvh-48px)] md:flex-col md:overflow-y-auto md:overflow-x-hidden md:px-6 md:py-5'
+            }
+          >
             <div className="flex items-start gap-2 md:flex-none">
               <h3 className="flex-1 text-[15px] font-semibold leading-snug text-foreground [text-wrap:balance]">
                 {section.title}
@@ -195,7 +286,19 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
             </div>
 
             {section.overview && (
-              <div className="mt-3.5 space-y-2.5 md:flex-none">{renderMarkdownProse(section.overview, { tone: 'muted' })}</div>
+              <div className={`mt-3.5 space-y-2.5 md:flex-none${figureLed ? ' max-w-[72ch]' : ''}`} onClick={handleProseClick}>
+                {renderMarkdownProse(section.overview, { tone: 'muted' })}
+              </div>
+            )}
+
+            {section.diagrams?.map((svg, i) => (
+              <GuideDiagram key={i} svg={svg} onRevealFile={onRequestReveal} />
+            ))}
+
+            {figureLed && !codeOpen && (
+              <p className="mt-3 text-[11px] text-muted-foreground/60">
+                Click a bound box in the figure, or a file below, to open its diff.
+              </p>
             )}
 
             {section.diffs.length > 0 && (
@@ -215,7 +318,20 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
           </div>
         </div>
 
+        {codeOpen && (
         <div className="min-w-0 space-y-4 bg-muted/[0.07] px-1.5 py-3 md:px-4 md:py-4">
+          {figureLed && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setCodeDismissed(true)}
+                className="text-[11px] text-muted-foreground/60 transition-colors hover:text-foreground"
+                title="Close the diffs and give the figure the full width"
+              >
+                Close diffs
+              </button>
+            </div>
+          )}
           {files.length > 0 ? (
             files.map((file) => (
               <GuideFileCard
@@ -236,6 +352,7 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

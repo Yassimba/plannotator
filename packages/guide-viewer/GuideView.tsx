@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CodeGuideData, GuideSection } from '@plannotator/core/guide';
 import type { DiffFile } from './types';
-import { useGuideHost } from './host';
+import { useGuideHost, type GuideFileScrollTarget } from './host';
 import { renderInlineMarkdown } from './renderInlineMarkdown';
 import { GuideSectionCard } from './GuideSectionCard';
+import { GuidePeek } from './GuidePeek';
 import { GUIDE_EAGER_MOUNT_MAX_FILES, GuideViewportProvider } from './GuideViewportManager';
 
 interface GuideViewProps {
@@ -83,22 +84,38 @@ export const GuideView: React.FC<GuideViewProps> = ({
     ?? resolved.unplacedFiles[0]?.path
     ?? null;
 
+  /**
+   * Document mode: a guide with figures is one continuous document (contents
+   * rail, prose, figures, chips) with ONE code peek beside it, the way a
+   * Review reads. A guide without figures keeps the card layout, where every
+   * file's diff sits in flow and the code is the chapter.
+   */
+  const documentMode = guide.sections.some((section) => (section.diagrams?.length ?? 0) > 0);
+  const [peekClosed, setPeekClosed] = useState(false);
+  // The line a figure box or prose anchor named; the host's reveal channel is file-level.
+  const revealLineRef = useRef<{ path: string; line: number } | null>(null);
+
   const localRevealTokenRef = useRef(0);
   const [localRevealTarget, setLocalRevealTarget] = useState<{ filePath: string; token: number } | null>(null);
   const externalRevealTarget = host.revealFile
     ? { filePath: host.revealFile.path, token: host.revealFile.token }
     : null;
   const revealTarget = externalRevealTarget ?? localRevealTarget;
+  const peekTarget = revealTarget && revealLineRef.current?.path === revealTarget.filePath
+    ? { ...revealTarget, line: revealLineRef.current.line }
+    : revealTarget;
 
   useEffect(() => {
     if (!revealTarget) return;
     onFocusFile(revealTarget.filePath);
+    setPeekClosed(false);
     // Token identifies a navigation event; callback identity must not replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealTarget?.filePath, revealTarget?.token]);
 
   const handleRequestReveal = useCallback(
-    (filePath: string) => {
+    (filePath: string, line?: number) => {
+      revealLineRef.current = line ? { path: filePath, line } : null;
       onFocusFile(filePath);
       if (host.onRevealFile) {
         host.onRevealFile(filePath);
@@ -178,6 +195,48 @@ export const GuideView: React.FC<GuideViewProps> = ({
         )}
       </div>
 
+      {documentMode ? (
+        <DocumentLayout
+          guide={guide}
+          resolved={resolved}
+          focusedFile={effectiveFocusedFile}
+          peekTarget={peekTarget}
+          peekClosed={peekClosed}
+          onClosePeek={() => setPeekClosed(true)}
+          onActivate={onFocusFile}
+        >
+          {guide.sections.map((section, index) => (
+            <GuideSectionCard
+              key={`${section.title}:${index}`}
+              section={section}
+              files={resolved.sectionFiles[index] ?? []}
+              index={index}
+              total={cardTotal}
+              reviewed={!!reviewed[index]}
+              onToggleReviewed={() => onToggleReviewed(index)}
+              focusedFile={effectiveFocusedFile}
+              revealTarget={revealTarget}
+              onActivate={onFocusFile}
+              onRequestReveal={handleRequestReveal}
+              document
+            />
+          ))}
+          {unplacedSection && (
+            <GuideSectionCard
+              section={unplacedSection}
+              files={resolved.unplacedFiles}
+              index={guide.sections.length}
+              total={cardTotal}
+              showReviewed={false}
+              focusedFile={effectiveFocusedFile}
+              revealTarget={revealTarget}
+              onActivate={onFocusFile}
+              onRequestReveal={handleRequestReveal}
+              document
+            />
+          )}
+        </DocumentLayout>
+      ) : (
       <div className="mt-6 space-y-4">
         {guide.sections.map((section, index) => (
           <GuideSectionCard
@@ -209,6 +268,102 @@ export const GuideView: React.FC<GuideViewProps> = ({
           />
         )}
       </div>
+      )}
     </GuideViewportProvider>
   );
 };
+
+/**
+ * Contents rail | document | code peek. The rail names every chapter and
+ * marks the one whose file is open in the peek; the peek holds the focused
+ * file and closes to give the document the width back.
+ */
+function DocumentLayout({
+  guide,
+  resolved,
+  focusedFile,
+  peekTarget,
+  peekClosed,
+  onClosePeek,
+  onActivate,
+  children,
+}: {
+  guide: CodeGuideData;
+  resolved: ResolvedGuideSections;
+  focusedFile: string | null;
+  peekTarget: GuideFileScrollTarget | null;
+  peekClosed: boolean;
+  onClosePeek: () => void;
+  onActivate: (filePath: string) => void;
+  children: React.ReactNode;
+}) {
+  const host = useGuideHost();
+  const [peekExpanded, setPeekExpanded] = useState(false);
+  const peekFile = !peekClosed && focusedFile ? host.files.find((file) => file.path === focusedFile) : null;
+  const peekSummary = peekFile
+    ? guide.sections.flatMap((section) => section.diffs).find((ref) => ref.file === peekFile.path)?.summary
+    : undefined;
+  // ponytail: "current" is the chapter whose file is open, not scroll position; add an observer if readers ask.
+  const currentIndex = focusedFile ? resolved.sectionFiles.findIndex((files) => files.some((file) => file.path === focusedFile)) : -1;
+  const titles = [...guide.sections.map((section) => section.title), ...(guide.unplacedFiles?.length ? ['Everything else'] : [])];
+
+  // ⇧Z zooms the code panel to the window, Esc leaves it. Skipped while the
+  // reader types (a comment, search) so the shortcut never eats a keystroke.
+  useEffect(() => {
+    if (!peekFile) {
+      setPeekExpanded(false);
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      const el = event.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (event.key === 'Z' && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setPeekExpanded((value) => !value);
+      } else if (event.key === 'Escape') {
+        setPeekExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [peekFile]);
+
+  return (
+    <div
+      className={`mt-6 lg:grid lg:gap-6 ${
+        peekFile ? 'lg:grid-cols-[168px_minmax(0,1fr)_minmax(400px,42%)]' : 'lg:grid-cols-[168px_minmax(0,1fr)]'
+      }`}
+    >
+      <nav aria-label="Contents" className="mb-6 lg:sticky lg:top-3 lg:mb-0 lg:self-start">
+        <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">Contents</p>
+        <ol className="space-y-1">
+          {titles.map((title, index) => (
+            <li key={`${title}:${index}`}>
+              <a
+                href={`#guide-section-${index}`}
+                className={`flex gap-2 rounded px-1.5 py-1 text-[12px] leading-snug transition-colors hover:text-foreground ${
+                  index === currentIndex ? 'bg-primary/10 text-primary' : 'text-muted-foreground'
+                }`}
+              >
+                <span className="font-mono text-[10px] text-muted-foreground/50">{index + 1}</span>
+                <span className="min-w-0">{title}</span>
+              </a>
+            </li>
+          ))}
+        </ol>
+      </nav>
+      <article className="min-w-0 space-y-8">{children}</article>
+      {peekFile && (
+        <GuidePeek
+          file={peekFile}
+          summary={peekSummary}
+          revealTarget={peekTarget}
+          onActivate={onActivate}
+          onClose={onClosePeek}
+          expanded={peekExpanded}
+          onToggleExpanded={() => setPeekExpanded((value) => !value)}
+        />
+      )}
+    </div>
+  );
+}

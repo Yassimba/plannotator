@@ -456,3 +456,78 @@ describe('GuideView per-file windowing', () => {
     expect(latestByFile.get('b.ts')?.isActive).toBe(false);
   });
 });
+
+describe('document mode (guides with figures)', () => {
+  const figure = '<svg viewBox="0 0 100 40"><g data-code="a.ts:3-9"><rect id="box" width="40" height="20"/></g></svg>';
+  const figureGuide = () =>
+    makeGuide({
+      sections: [
+        { title: 'Core', overview: 'Open [the core](src/b.ts:2) here.', diffs: [{ file: 'a.ts', summary: 'Changes A.' }], diagrams: [figure] },
+        { title: 'Glue', overview: 'Wiring.', diffs: [{ file: 'src/b.ts', summary: 'Changes B.' }] },
+      ],
+      reviewed: [false, false],
+    });
+
+  test.skipIf(!hasDom)('lays the guide out as contents, document and one peek; no file cards in flow', async () => {
+    await renderView(figureGuide(), { state: makeState({ files: [makeFile('a.ts'), makeFile('b.ts')] }) });
+
+    expect(host!.querySelector('nav[aria-label="Contents"]')?.textContent).toContain('Glue');
+    expect(host!.querySelectorAll('article section')).toHaveLength(2);
+    // The peek shows the focused file (first placed file by default) and nothing else mounts.
+    expect(host!.querySelectorAll('[data-guide-file-shell]')).toHaveLength(1);
+    expect(host!.querySelector('[data-guide-peek]')?.getAttribute('data-guide-peek')).toBe('a.ts');
+  });
+
+  test.skipIf(!hasDom)('a figure box opens its file in the peek at the bound line', async () => {
+    await renderView(figureGuide(), { state: makeState({ files: [makeFile('a.ts'), makeFile('b.ts')] }) });
+    latestCodeViewProps = [];
+
+    await act(async () => {
+      host!.querySelector('#box')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const targeted = latestCodeViewProps.find((props) => props.fileScrollTarget != null);
+    expect(targeted?.fileScrollTarget).toMatchObject({ filePath: 'a.ts', line: 3 });
+  });
+
+  test.skipIf(!hasDom)('a prose anchor swaps the peek to its file and Close hides it until the next reveal', async () => {
+    await renderView(figureGuide(), { state: makeState({ files: [makeFile('a.ts'), makeFile('src/b.ts')] }) });
+
+    await act(async () => {
+      host!.querySelector('article a[data-code]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(host!.querySelector('[data-guide-peek]')?.getAttribute('data-guide-peek')).toBe('src/b.ts');
+
+    await act(async () => {
+      (host!.querySelector('[aria-label="Close code"]') as HTMLElement).click();
+    });
+    expect(host!.querySelector('[data-guide-peek]')).toBeNull();
+
+    await act(async () => {
+      host!.querySelector('#box')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(host!.querySelector('[data-guide-peek]')?.getAttribute('data-guide-peek')).toBe('a.ts');
+  });
+});
+
+describe('code peek zoom', () => {
+  const figure = '<svg viewBox="0 0 100 40"><g data-code="a.ts"><rect id="box" width="40" height="20"/></g></svg>';
+  const guide = () =>
+    makeGuide({ sections: [{ title: 'Core', overview: 'x', diffs: [{ file: 'a.ts' }], diagrams: [figure] }], reviewed: [false] });
+
+  test.skipIf(!hasDom)('Shift+Z expands the peek to the window and Escape collapses it', async () => {
+    await renderView(guide(), { state: makeState({ files: [makeFile('a.ts')] }) });
+    const peek = () => host!.querySelector('[data-guide-peek]')!.getAttribute('data-guide-peek-expanded');
+    expect(peek()).toBe('false');
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Z', shiftKey: true }));
+    });
+    expect(peek()).toBe('true');
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(peek()).toBe('false');
+  });
+});

@@ -40,6 +40,10 @@ export type AgentLaunchParams = {
   /** Reviewer-supplied extra instructions (#1265), appended to the Guided
    *  Review organizer prompt. Guide launches only; other providers ignore it. */
   instructions?: string;
+  /** Guide launches only, every engine: "walkthrough" runs the
+   *  changeset-walkthrough skill (figure-led, the default when it is
+   *  installed); "organizer" keeps the prose-only organizer prompt. */
+  workflow?: 'organizer' | 'walkthrough';
 };
 
 /** Does a job belong to the given review context? Jobs launched against a PR

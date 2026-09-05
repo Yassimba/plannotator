@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { resolveGlobalSkillRoots } from "../review-skill-loader";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 import { loadConfig, resolveCursorSandbox } from "../config";
@@ -48,6 +50,7 @@ export const GUIDE_SCHEMA_JSON = JSON.stringify({
         properties: {
           title: { type: "string" },
           overview: { type: "string" },
+          diagrams: { type: "array", items: { type: "string" } },
           diffs: {
             type: "array",
             items: {
@@ -228,6 +231,27 @@ never shares a chapter.
     implications; the summary says what this specific file contributes.
     For a trivial change (import bump, rename fallout), one short clause
     is enough.
+
+#### Section diagram (optional, usually absent)
+A section may carry \`diagram\`: one inline \`<svg>...</svg>\` string, rendered
+above the file list. Add one ONLY when the chapter's shape is the thing the
+reviewer needs and prose cannot carry it: a request crossing four components,
+a state machine that gained a transition, a dependency that reversed
+direction. A figure that just lists the files again is worse than no figure.
+Most guides have zero. One is common. Never more than two.
+
+Bind the figure to the code. Any element may carry \`data-code\` naming the
+files it stands for, comma-separated, first one primary:
+  <g data-code="packages/server/review.ts">
+  <g data-code="packages/core/guide.ts, packages/core/guide-format.ts">
+Clicking that element reveals the first file's diff, so a bound path MUST be
+one of the changed files, spelled exactly as in the Changed files list.
+Binding is what makes the figure navigable; an unbound box is decoration.
+
+Write plain SVG: shapes, paths, and \`<text>\`. Set \`viewBox\` and no fixed
+\`width\`/\`height\` so it scales to the column. Use \`currentColor\` for strokes
+and text so it reads in both themes. No scripts, no event handlers, no
+external images, no foreignObject — they are stripped before rendering.
 
 ### unplacedFiles
 Always include unplacedFiles. Use an empty array when every changed file is
@@ -424,13 +448,65 @@ function buildWorkspaceGuideUserMessage(
   ].join("\n");
 }
 
+/**
+ * The figure-led walkthrough workflow (`workflow: "walkthrough"`). The guide
+ * job runs the user's `changeset-walkthrough` skill instead of the organizer
+ * prompt, so an in-app guide is the same artifact the skill produces by
+ * hand: chaptered, diagram-design figures bound to changed files, ADHD-shaped
+ * prose. Every engine runs it: Claude through a widened allowlist, Codex in
+ * its workspace-write sandbox, the marker engines with their read-only guard
+ * lifted for the job (MarkerBuildOptions.walkthrough).
+ */
+export type GuideWorkflow = "organizer" | "walkthrough";
+
+/** Path of the installed changeset-walkthrough SKILL.md in any global skill root, or null. */
+export function resolveWalkthroughSkill(): string | null {
+  return resolveGlobalSkillRoots()
+    .map(({ dir }) => join(dir, "changeset-walkthrough", "SKILL.md"))
+    .find((candidate) => existsSync(candidate)) ?? null;
+}
+
+export function composeWalkthroughPrompt(skillPath: string, userMessage: string, outputContract?: string): string {
+  return [
+    "# Guided Review: figure-led walkthrough",
+    "",
+    `Read ${skillPath} and follow it end to end. It is the whole method; this`,
+    "message only binds it to this job:",
+    "",
+    "- Step 1: the range is the diff below. The working directory is the",
+    "  repository; the Changed files list is authoritative and every path you",
+    "  write must appear on it, spelled identically. Do not re-derive the range.",
+    "- Steps 2–7: run as written. Write the brief, figure record, figure scripts",
+    "  and guide under ai-docs/walkthroughs/<slug>/ in the repository.",
+    "- Step 8 does not apply: do not run `plannotator guide import` or",
+    "  `plannotator review`. Plannotator launched this job and persists the",
+    "  result itself.",
+    "- Final answer: the guide JSON only — title, intent, sections (each with",
+    "  overview, diffs, and diagrams as inline SVG markup with the XML",
+    "  declaration removed), unplacedFiles. Every changed file placed exactly",
+    "  once. A section's diagrams must keep their data-code attributes.",
+    ...(outputContract ? ["", outputContract] : []),
+    "",
+    "---",
+    "",
+    userMessage,
+  ].join("\n");
+}
+
 export interface GuideClaudeCommandResult {
   command: string[];
   stdinPrompt: string;
 }
 
-export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet", effort?: string): GuideClaudeCommandResult {
+export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet", effort?: string, walkthrough = false): GuideClaudeCommandResult {
   const allowedTools = [
+    // The walkthrough skill writes its brief, figure scripts and guide under
+    // ai-docs/ and runs python3, rsvg-convert and check-figures.sh.
+    ...(walkthrough
+      ? ["Write", "Edit", "Bash(python3:*)", "Bash(rsvg-convert:*)", "Bash(bash:*)", "Bash(mkdir:*)", "Bash(ls:*)",
+         "Bash(cat:*)", "Bash(sed:*)", "Bash(grep:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(echo:*)", "Bash(cp:*)",
+         "Bash(calldiff:*)", "Bash(npx calldiff:*)", "Bash(codegraph:*)"]
+      : []),
     "Agent", "Read", "Glob", "Grep",
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
     "Bash(git show:*)", "Bash(git blame:*)", "Bash(git branch:*)",
@@ -451,10 +527,15 @@ export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet"
   ].join(",");
 
   const disallowedTools = [
-    "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
-    "Bash(python:*)", "Bash(python3:*)", "Bash(node:*)", "Bash(npx:*)",
-    "Bash(bun:*)", "Bash(bunx:*)", "Bash(sh:*)", "Bash(bash:*)", "Bash(zsh:*)",
+    "NotebookEdit", "WebFetch", "WebSearch",
+    "Bash(python:*)", "Bash(node:*)", "Bash(npx:*)",
+    "Bash(bun:*)", "Bash(bunx:*)", "Bash(sh:*)", "Bash(zsh:*)",
     "Bash(curl:*)", "Bash(wget:*)",
+    // The app owns persistence and the review session; the organizer never
+    // writes at all.
+    ...(walkthrough
+      ? ["Bash(plannotator:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)"]
+      : ["Edit", "Write", "Bash(python3:*)", "Bash(bash:*)"]),
   ].join(",");
 
   return {
@@ -467,7 +548,7 @@ export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet"
       "--no-session-persistence",
       "--model", model,
       ...(effort ? ["--effort", effort] : []),
-      "--tools", "Agent,Bash,Read,Glob,Grep",
+      "--tools", walkthrough ? "Agent,Bash,Read,Glob,Grep,Write,Edit" : "Agent,Bash,Read,Glob,Grep",
       "--allowedTools", allowedTools,
       "--disallowedTools", disallowedTools,
     ],
@@ -818,7 +899,13 @@ function sanitizeGuideSection(raw: unknown): GuideSection | null {
   // Keeping the section (titled) beats dropping it: its files were PLACED by
   // the model, so they're not in unplacedFiles and dropping would silently
   // orphan them from the guide's coverage story.
-  return { title: title.trim() ? title : "Untitled section", overview, diffs };
+  // Carried verbatim; the SVG is sanitized where it is rendered, which is the
+  // only step every producer of a guide passes through. Blank entries are
+  // dropped rather than rendered as empty figures.
+  const diagrams = Array.isArray(s.diagrams)
+    ? s.diagrams.filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+    : [];
+  return { title: title.trim() ? title : "Untitled section", overview, diffs, ...(diagrams.length ? { diagrams } : {}) };
 }
 
 /** Sanitizes a raw sections array (see `sanitizeGuideSection`). Shared by the
@@ -947,6 +1034,8 @@ export interface GuideSessionBuildCommandResult {
   fastMode?: boolean;
   /** Pi's unified reasoning level (marker engines only). */
   thinking?: string;
+  /** Which method wrote the guide; absent means the organizer prompt. */
+  workflow?: GuideWorkflow;
 }
 
 export interface GuideSessionJobSummary {
@@ -1270,25 +1359,40 @@ export function createGuideSession(): GuideSession {
       // marker branch: per-job nonce embedded in the prompt, recovered from
       // job.prompt at parse time in onJobComplete below. captureStdout is
       // required — the marker block comes back on stdout NDJSON.
+      // Walkthrough by default when the skill is installed, on every engine;
+      // `workflow: "organizer"` opts back into the prose-only prompt, and
+      // asking for the walkthrough without the skill fails loud.
+      const skillPath = config?.workflow === "organizer" ? null : resolveWalkthroughSkill();
+      if (!skillPath && config?.workflow === "walkthrough") {
+        throw new Error("The figure-led walkthrough needs the changeset-walkthrough skill installed under ~/.claude/skills, ~/.agents/skills or ~/.codex/skills.");
+      }
+      const workflow = skillPath ? { workflow: "walkthrough" as const } : {};
+
       const markerEngine = MARKER_ENGINES[engine as MarkerEngineId];
       if (markerEngine) {
         const thinking = typeof config?.thinking === "string" && config.thinking ? config.thinking : undefined;
         const nonce = makeMarkerNonce();
-        const markerPrompt = composeGuideMarkerPrompt(userMessage, nonce, extraInstructions);
-        const { command } = buildMarkerCommand(markerEngine, markerPrompt, model || undefined, cwd, { thinking, cursorSandbox: resolveCursorSandbox(loadConfig()) });
-        return { command, prompt: markerPrompt, cwd, label: "Guided Review", captureStdout: true, engine: markerEngine.id, model, thinking };
+        const markerPrompt = skillPath
+          ? composeWalkthroughPrompt(skillPath, userMessage, buildGuideMarkerOutputContract(nonce))
+          : composeGuideMarkerPrompt(userMessage, nonce, extraInstructions);
+        const { command } = buildMarkerCommand(markerEngine, markerPrompt, model || undefined, cwd, { thinking, cursorSandbox: resolveCursorSandbox(loadConfig()), walkthrough: !!skillPath });
+        return { command, prompt: markerPrompt, cwd, label: "Guided Review", captureStdout: true, engine: markerEngine.id, model, thinking, ...workflow };
       }
 
-      const prompt = composeGuideMethodology(extraInstructions) + "\n\n---\n\n" + userMessage;
+      const prompt = skillPath
+        ? composeWalkthroughPrompt(skillPath, userMessage)
+        : composeGuideMethodology(extraInstructions) + "\n\n---\n\n" + userMessage;
 
       if (engine === "codex") {
+        // Codex exec's workspace-write sandbox already lets the skill write
+        // under the repo and run python3; only the prompt changes.
         const outputPath = generateGuideOutputPath();
         const command = await buildGuideCodexCommand({ cwd, outputPath, prompt, model: model || undefined, reasoningEffort, fastMode });
-        return { command, outputPath, prompt, label: "Guided Review", engine: "codex", model, reasoningEffort, fastMode: fastMode || undefined };
+        return { command, outputPath, prompt, label: "Guided Review", engine: "codex", model, reasoningEffort, fastMode: fastMode || undefined, ...workflow };
       }
 
-      const { command, stdinPrompt } = buildGuideClaudeCommand(prompt, model, effort);
-      return { command, stdinPrompt, prompt, cwd, label: "Guided Review", captureStdout: true, engine: "claude", model, effort };
+      const { command, stdinPrompt } = buildGuideClaudeCommand(prompt, model, effort, !!skillPath);
+      return { command, stdinPrompt, prompt, cwd, label: "Guided Review", captureStdout: true, engine: "claude", model, effort, ...workflow };
     },
 
     async onJobComplete({ job, meta, changedFiles, launchReview }) {

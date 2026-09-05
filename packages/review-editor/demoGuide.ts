@@ -30,6 +30,30 @@ export const DEMO_GUIDE: CodeGuideData = {
     },
     {
       title: 'Auth hook rewritten against a typed request client',
+      // Exercises section diagrams: every box carries `data-code`, so clicking
+      // one reveals that file's card below. Paths match DEMO_DIFF.
+      diagrams: [`<svg viewBox="0 0 720 190" role="img" aria-label="useAuth delegates to the typed client, which raises ApiError">
+  <g data-code="src/hooks/useAuth.ts" style="cursor:pointer">
+    <rect x="8" y="60" width="180" height="66" rx="8" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.85"/>
+    <text x="98" y="88" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">useAuth</text>
+    <text x="98" y="108" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.7">login · logout · refresh</text>
+  </g>
+  <path d="M188 93 L262 93" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+  <path d="M262 93 l-8 -4 v8 z" fill="currentColor" opacity="0.6"/>
+  <g data-code="src/services/api.ts" style="cursor:pointer">
+    <rect x="270" y="60" width="180" height="66" rx="8" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.85"/>
+    <text x="360" y="88" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">api.auth.*</text>
+    <text x="360" y="108" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.7">typed request client</text>
+  </g>
+  <path d="M450 93 L524 93" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+  <path d="M524 93 l-8 -4 v8 z" fill="currentColor" opacity="0.6"/>
+  <g data-code="src/services/api.ts" style="cursor:pointer">
+    <rect x="532" y="60" width="180" height="66" rx="8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.85"/>
+    <text x="622" y="88" text-anchor="middle" fill="currentColor" font-size="14" font-weight="600">ApiError</text>
+    <text x="622" y="108" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.7">status + code</text>
+  </g>
+  <text x="360" y="168" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.55">a failure now reaches the UI as an error, not a null</text>
+</svg>`],
       overview:
         'useAuth used to fake success/failure with untyped fetch calls; it now delegates to `api.auth.*`, a typed client with a proper `ApiError` class carrying status and code. `login`/`logout`/`refresh` are all `useCallback`-wrapped and the hook now tracks `error` in state so the UI can show why a login failed rather than just spinning. This is the change that made the Button fix visible in the first place: a disabled login button that silently still fired was masking failed-login retries.',
       diffs: [

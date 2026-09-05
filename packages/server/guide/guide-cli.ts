@@ -31,7 +31,19 @@ import {
   type GuideSnapshotSource,
 } from "@plannotator/shared/guide-format";
 import { GUIDE_VIEWER_MANIFEST } from "@plannotator/shared/guide-viewer-manifest";
-import { buildSavedGuideSnapshot, findSavedGuideById, listAllSavedGuides, updateGuideShare, type SavedGuideShare } from "@plannotator/shared/guide-store";
+import {
+  buildSavedGuideSnapshot,
+  deriveGuideRepoKeyFallback,
+  deriveGuideRepoKeyFromRemote,
+  findSavedGuideById,
+  listAllSavedGuides,
+  makeGuideId,
+  saveGuide,
+  saveGuidePatch,
+  updateGuideShare,
+  type SavedGuideEnvelope,
+  type SavedGuideShare,
+} from "@plannotator/shared/guide-store";
 import { parseRemoteUrl } from "@plannotator/shared/repo";
 import { loadConfig, resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
 import { validateGuideOutput } from "./guide-review";
@@ -46,12 +58,16 @@ export interface GuideCliResult {
 export const GUIDE_CLI_USAGE = [
   "Usage:",
   "  plannotator guide list",
+  "  plannotator guide import --guide <guide.json> --patch <diff.patch | -> [--label <text>]",
   "  plannotator guide export --id <savedGuideId> [--out <file.html> | --out -]",
   "  plannotator guide export --guide <guide.json> --patch <diff.patch | -> [--out <file.html> | --out -]",
   "  plannotator guide export --snapshot <snapshot.json> [--out <file.html> | --out -]",
   "  plannotator guide share --id <savedGuideId> | --guide <guide.json> --patch <diff.patch | -> | --snapshot <snapshot.json>",
   "                          [--public] [--ttl <7d | 24h | 30m | 3600>] [--json]",
   "  plannotator guide unshare <id> --token <deleteToken>",
+  "",
+  "Import puts an authored guide on the local shelf so `plannotator review` can OPEN it under",
+  "Previous guides — annotatable, with threads. Export and share produce read-only artifacts instead.",
   "",
   "Export a Guided Review as one portable HTML file (the viewer loads from guides.show),",
   "or share it as a link on guides.show (or your own deployment of it: PLANNOTATOR_GUIDE_SHARE_URL,",
@@ -65,6 +81,7 @@ export const GUIDE_CLI_USAGE = [
   "                     from git in the current directory unless `source` says otherwise.",
   "  --patch <file>     The unified diff the guide describes (`git diff <base>...HEAD > guide.patch`); `-` reads stdin",
   "  --snapshot <file>  A complete portable guide snapshot document (JSON) to wrap as HTML",
+  "  --label <text>     (import) Row label in Previous guides (default: the branch, else the git ref)",
   "  --out <file>       Where to write the HTML (default: ./guided-review-<slug>.html); `-` writes to stdout",
   "  --viewer-url <u>   Viewer base URL override (default https://guides.show/v1/; also PLANNOTATOR_GUIDE_VIEWER_URL)",
   "",
@@ -461,12 +478,109 @@ export async function runGuideUnshare(argv: string[], env: NodeJS.ProcessEnv = p
   return { code: 0, stdout: "Removed\n" };
 }
 
+/**
+ * Resolve the shelf an imported guide lands on, matching what a running review
+ * server picks for the same checkout (`createGuideStoreSession.resolveRepoKey`)
+ * — origin remote first, repo root second. An import that landed under a
+ * different key would be invisible in the app, which is the whole point of the
+ * verb.
+ */
+function resolveImportRepoKey(cwd: string): string {
+  const remote = git(["remote", "get-url", "origin"], cwd);
+  if (remote) {
+    const key = deriveGuideRepoKeyFromRemote(remote);
+    if (key) return key;
+  }
+  const toplevel = git(["rev-parse", "--show-toplevel"], cwd);
+  return deriveGuideRepoKeyFallback(toplevel || cwd);
+}
+
+/**
+ * `guide import` — put an authored guide on the local shelf so the review app
+ * can OPEN it, rather than freezing it into a portable HTML file.
+ *
+ * `export` and `share` both produce read-only artifacts. A guide meant to be
+ * annotated has to reach the running app, and the app reads guides from the
+ * store, so this writes the same envelope shape the in-app job autosaves. The
+ * guide then appears under "Previous guides" and opens as `saved:{id}` with
+ * the full review surface: reveal, threads, line-level annotation.
+ *
+ * Validation is `buildAuthoredGuideSnapshot`'s — strict, the same bar `export`
+ * applies — so a guide that imports is a guide that exports.
+ */
+async function runGuideImport(argv: string[], cwd: string, io: GuideCliIo): Promise<GuideCliResult> {
+  const usage = (msg: string) => ({ code: 2 as const, stderr: `${msg}\n\n${GUIDE_CLI_USAGE}\n` });
+
+  const guideOpt = takeOption(argv, "--guide");
+  if ("error" in guideOpt) return usage(guideOpt.error);
+  const patchOpt = takeOption(guideOpt.rest, "--patch");
+  if ("error" in patchOpt) return usage(patchOpt.error);
+  const labelOpt = takeOption(patchOpt.rest, "--label");
+  if ("error" in labelOpt) return usage(labelOpt.error);
+  if (labelOpt.rest.length > 0) return usage(`Unknown argument: ${labelOpt.rest[0]}`);
+  if (!guideOpt.value || !patchOpt.value) return usage("import needs --guide <guide.json> and --patch <diff.patch | ->.");
+
+  const guideFile = resolve(cwd, guideOpt.value);
+  if (!existsSync(guideFile)) return { code: 1, stderr: `Guide file not found: ${guideFile}\n` };
+
+  let rawPatch: string;
+  if (patchOpt.value === "-") {
+    const piped = io.stdin?.();
+    if (piped === undefined) return { code: 1, stderr: "--patch - needs the patch on stdin.\n" };
+    rawPatch = piped;
+  } else {
+    const patchFile = resolve(cwd, patchOpt.value);
+    if (!existsSync(patchFile)) return { code: 1, stderr: `Patch file not found: ${patchFile}\n` };
+    rawPatch = readFileSync(patchFile, "utf-8");
+  }
+
+  const built = buildAuthoredGuideSnapshot(readFileSync(guideFile, "utf-8"), rawPatch, { cwd, now: io.now });
+  if (!built.ok) return { code: 1, stderr: `${built.error}\n` };
+
+  // `source` is a sibling of `review` on the snapshot, but the envelope nests
+  // it under its own review block.
+  const { reviewed: _snapshotReviewed, ...guide } = built.snapshot.guide;
+  const { review, source } = built.snapshot;
+  const repoKey = resolveImportRepoKey(cwd);
+  const id = makeGuideId(guide.title);
+
+  // Patch first, then the envelope that references it — the store's invariant:
+  // an envelope must never point at a patch that is not on disk yet.
+  const patchSaved = saveGuidePatch(repoKey, id, rawPatch);
+  if (!patchSaved) return { code: 1, stderr: `Could not write the patch for guide ${id}.\n` };
+
+  const envelope: SavedGuideEnvelope = {
+    version: 1,
+    savedAt: Date.now(),
+    label: labelOpt.value ?? source.branch ?? review.gitRef,
+    title: guide.title,
+    ...(source.headSha && { headSha: source.headSha }),
+    review: {
+      gitRef: review.gitRef,
+      ...(review.diffType && { diffType: review.diffType }),
+      ...(review.base && { base: review.base }),
+      source,
+      patchFile: `${id}.patch`,
+    },
+    guide,
+    reviewed: [],
+  };
+  if (!saveGuide(repoKey, id, envelope)) return { code: 1, stderr: `Could not write the guide envelope for ${id}.\n` };
+
+  return {
+    code: 0,
+    stdout: `${id}\n`,
+    stderr: `Imported "${guide.title}" onto the ${repoKey} shelf.\nOpen it: plannotator review, then Previous guides.\n`,
+  };
+}
+
 export async function runGuideCli(argv: string[], env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), io: GuideCliIo = {}): Promise<GuideCliResult> {
   const [sub, ...rest] = argv;
   if (sub === "list") {
     if (rest.length > 0) return { code: 2, stderr: `Unknown argument: ${rest[0]}\n\n${GUIDE_CLI_USAGE}\n` };
     return runGuideList();
   }
+  if (sub === "import") return runGuideImport(rest, cwd, io);
   if (sub === "export") return runGuideExport(rest, env, cwd, io);
   if (sub === "share") return runGuideShare(rest, env, cwd, io);
   if (sub === "unshare") return runGuideUnshare(rest, env, io);

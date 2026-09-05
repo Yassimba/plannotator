@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { afterEach, beforeEach, describe, it, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   GUIDE_NO_SECTIONS_ERROR,
@@ -8,6 +8,7 @@ import {
   composeGuideMarkerPrompt,
   composeGuideMethodology,
   createGuideSession,
+  resolveWalkthroughSkill,
   repairGuideJsonText,
   validateGuideOutput,
   parseGuideStreamOutput,
@@ -261,7 +262,7 @@ describe("guide extra instructions (#1265)", () => {
       cwd: "/tmp",
       patch: "diff",
       diffType: "uncommitted" as DiffType,
-      config: { engine: "claude" },
+      config: { engine: "claude", workflow: "organizer" },
     });
     const userMessage = buildGuideUserMessage("diff", "uncommitted" as DiffType, undefined, undefined, undefined);
     expect(built.prompt).toBe(GUIDE_REVIEW_PROMPT + "\n\n---\n\n" + userMessage);
@@ -274,7 +275,7 @@ describe("guide extra instructions (#1265)", () => {
       cwd: "/tmp",
       patch: "diff",
       diffType: "uncommitted" as DiffType,
-      config: { engine: "claude", instructions: "Use product names." },
+      config: { engine: "claude", instructions: "Use product names.", workflow: "organizer" },
     });
     expect(built.prompt).toContain("## Additional reviewer instructions");
     expect(built.prompt).toContain("Use product names.");
@@ -416,5 +417,87 @@ describe("createGuideSession launch review memo (portable export)", () => {
     expect(session.launchReviews.size).toBe(20);
     expect(session.getLaunchReview("job-0")).toBeNull();
     expect(session.getLaunchReview("job-24")).toEqual(review(24));
+  });
+});
+
+describe("guide walkthrough workflow", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+  let home: string;
+  const ENV = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME"] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "pn-home-"));
+    saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+    for (const k of ENV) delete process.env[k];
+    process.env.HOME = home;
+  });
+  afterEach(() => {
+    for (const k of ENV) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+  const installSkill = () => {
+    const dir = join(home, ".claude", "skills", "changeset-walkthrough");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "# Changeset Walkthrough\n");
+    return join(dir, "SKILL.md");
+  };
+
+  it("resolves the skill from the global skill roots, or null when it is not installed", () => {
+    expect(resolveWalkthroughSkill()).toBeNull();
+    const path = installSkill();
+    expect(resolveWalkthroughSkill()).toBe(path);
+  });
+
+  it("a claude launch runs the skill when installed, with the tools it needs and without the app's own CLI", async () => {
+    const path = installSkill();
+    const built = await createGuideSession().buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "claude" } });
+    expect(built.workflow).toBe("walkthrough");
+    expect(built.prompt).toContain(`Read ${path}`);
+    expect(built.prompt).toContain("do not run `plannotator guide import`");
+    const tools = built.command[built.command.indexOf("--tools") + 1];
+    expect(tools).toContain("Write");
+    const allowed = built.command[built.command.indexOf("--allowedTools") + 1];
+    expect(allowed).toContain("Bash(python3:*)");
+    const disallowed = built.command[built.command.indexOf("--disallowedTools") + 1];
+    expect(disallowed).toContain("Bash(plannotator:*)");
+    expect(disallowed).not.toContain("Bash(python3:*)");
+  });
+
+  it("falls back to the organizer when the skill is absent, and fails loud when it was asked for", async () => {
+    const session = createGuideSession();
+    const built = await session.buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "claude" } });
+    expect(built.workflow).toBeUndefined();
+    expect(built.prompt!.startsWith(GUIDE_REVIEW_PROMPT)).toBe(true);
+    await expect(
+      session.buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "claude", workflow: "walkthrough" } }),
+    ).rejects.toThrow(/changeset-walkthrough skill/);
+  });
+
+  it("marker and codex engines run the skill too, with their read-only guard lifted", async () => {
+    installSkill();
+    const session = createGuideSession();
+    const pi = await session.buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "pi" } });
+    expect(pi.workflow).toBe("walkthrough");
+    expect(pi.command).not.toContain("--exclude-tools");
+    expect(pi.prompt).toContain("## Output contract");
+    expect(pi.prompt!.indexOf("## Output contract")).toBeLessThan(pi.prompt!.indexOf("\n---\n"));
+    const codex = await session.buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "codex" } });
+    expect(codex.workflow).toBe("walkthrough");
+    expect(codex.prompt).toContain("changeset-walkthrough");
+    const cursor = await session.buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "cursor" } });
+    expect(cursor.command).toContain("agent");
+    expect(cursor.command).not.toContain("--sandbox");
+  });
+
+  it("workflow: organizer keeps the prose prompt even with the skill installed", async () => {
+    installSkill();
+    const built = await createGuideSession().buildCommand({ cwd: "/tmp", patch: "diff", diffType: "uncommitted" as DiffType, config: { engine: "claude", workflow: "organizer" } });
+    expect(built.workflow).toBeUndefined();
+    expect(built.prompt!.startsWith(GUIDE_REVIEW_PROMPT)).toBe(true);
   });
 });

@@ -43,3 +43,19 @@ describe("renderInlineMarkdown", () => {
     expect((linkNodes[1] as { type: string; props: { children?: unknown } }).props.children).toBe("italic");
   });
 });
+
+describe("code anchors", () => {
+  it("renders a code-path link as a bound anchor that navigates nowhere on its own", () => {
+    const nodes = renderInlineMarkdown("see [the spawn site](src/auth.ts:214-223) here");
+    const anchor = nodes.find(isElement) as { type: string; props: Record<string, unknown> };
+    expect(anchor.type).toBe("a");
+    expect(anchor.props["data-code"]).toBe("src/auth.ts:214-223");
+    expect(anchor.props.href).toBe("#");
+    expect(anchor.props.children).toBe("the spawn site");
+  });
+
+  it("leaves a non-http, non-code link target as literal text", () => {
+    const nodes = renderInlineMarkdown("see [x](not a path) here");
+    expect(nodes.filter(isElement)).toHaveLength(0);
+  });
+});

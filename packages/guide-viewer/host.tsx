@@ -17,6 +17,13 @@ export interface GuideRevealTarget {
   token: number;
 }
 
+/** A tokenized scroll request into one file's diff; `line` is the new-side line to center when known. */
+export interface GuideFileScrollTarget {
+  filePath: string;
+  token: number;
+  line?: number;
+}
+
 /** The host's active global-search match, if it has a search. */
 export interface GuideActiveSearchMatch {
   id: string;
@@ -31,7 +38,7 @@ export interface GuideActiveSearchMatch {
  */
 export interface GuideDiffRendererProps {
   files: DiffFile[];
-  fileScrollTarget: { filePath: string; token: number } | null;
+  fileScrollTarget: GuideFileScrollTarget | null;
   fileOrder: 'list';
   mountCollapsed: boolean;
   initialScrollPosition: number;
